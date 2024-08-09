@@ -1,2 +1,2 @@
 # BCI-FeaST
-BCI - Feature Selectection Toolbox
+BCI - Feature Selection Toolbox

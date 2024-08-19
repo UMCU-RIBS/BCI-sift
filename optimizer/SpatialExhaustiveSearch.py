@@ -197,7 +197,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
             A tuple with the solution, mask, the evaluation scores and the optimization history.
         """
-        # Initialize and run the SSHC optimizer
+        # Initialize and run the SES optimizer
         es = SES(
             func=self.objective_function,
             channel_grid=self.grid,

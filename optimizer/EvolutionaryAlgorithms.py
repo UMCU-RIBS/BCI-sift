@@ -55,7 +55,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     :param islands: int, default = 1
         The number of separate populations (islands) used in
         parallel evolutionary processes.
-    :parammethod: str, default = 'simple'
+    :param method: str, default = 'simple'
         The evolutionary algorithm to use. Options include 'simple',
         'mu_plus_lambda', 'mu_lambda', 'generate_update'.
     :param crossover: str, default = 'two_point'
@@ -147,12 +147,12 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     This implementation is semi-compatible with the scikit-learn framework,
     which builds around two-dimensional feature matrices. To use this
     transfortmation within a scikit-learn Pipeline, the four dimensional data
-    must eb flattened after the first dimension [samples, features]. For example,
+    must be flattened after the first dimension [samples, features]. For example,
     scikit-learn's FunctionTransformer can achieve this.
 
     Care must be taken when the lambda:mu ratio is 1 to 1 for the MuPlusLambda and
-    MuCommaLambda algorithms as a non-stochastic selection will result in no  selection
-    at all as the operator selects lambda individuals from a pool of mu.
+    MuCommaLambda algorithms as a non-stochastic selection will result in no selection
+    at all, since the operator selects lambda individuals from a pool of mu.
 
     References
     --------
@@ -278,7 +278,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             self, X: numpy.ndarray, y: numpy.ndarray = None
     ) -> Type['EvolutionaryAlgorithms']:
         """
-        Fit method optimizes the channel combination with Evolutionary Algorithms.
+        Optimizes the channel combination with Evolutionary Algorithms.
 
         Parameters:
         -----------
@@ -386,7 +386,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     def transform(self, X: numpy.ndarray, y: numpy.ndarray = None) -> numpy.ndarray:
         """
         Transforms the input with the mask obtained from the solution
-        of Evolutionary Algorithm.
+        of the evolutionary algorithm.
 
         Parameters:
         -----------

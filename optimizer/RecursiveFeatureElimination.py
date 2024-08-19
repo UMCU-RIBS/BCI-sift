@@ -69,6 +69,10 @@ class RecursiveFeatureElimination(BaseOptimizer):
         Evaluates the selected features using cross-validation or train-test split.
     - objective_function:
         Evaluate each candidate configuration and return their scores.
+    - elimination_plot:
+        Generates and saves a plot visualizing the maximum and all scores across different subgrid sizes.
+    - importance_plot:
+        Generates and saves a heatmap visualizing the importance of each channel within the grid.
 
     Notes:
     ------
@@ -181,7 +185,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
         Returns:
         --------
-        :return: numpy.ndarray #TODO: document coefs being returned
+        :return: numpy.ndarray #TODO: document ranks being changed (side effect)
             The evaluation scores for the selected features.
         """
         if self.cv == 1:

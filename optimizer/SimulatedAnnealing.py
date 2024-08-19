@@ -24,7 +24,7 @@ from ._Base_Optimizer import BaseOptimizer
 class SimulatedAnnealing(BaseOptimizer):
     """
     This class implements an Simulated Annealing algorithm for optimizing
-    EEG/MEG/ECOG channels within a structured grid. The Class rests on the
+    EEG/MEG/ECOG channels within a structured grid. The class rests on the
     shoulders of scipy's dual annealing implementation (see scipys dual
     annealing implementation for more information). This stochastic
     approach derived from [3]_ combines the generalization of CSA (Classical

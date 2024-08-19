@@ -50,15 +50,15 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
     :param epsilon: Tuple[float, float], default = (0.75, 0.25)
         Exploration factor, a tuple indicating the starting
         and final exploration values.
+    :param prior: Optional[numpy.ndarray], default = None
+        Explicitly initialize the optimizer state.
+        If set to None if particles positions are initialized randomly.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value
         is below this for `patience` iterations, the optimization will stop early.
     :param patience: int, default = int(1e5)
         The number of iterations for which the objective function
         improvement must be below `tol` to stop optimization.
-    :param prior: Optional[numpy.ndarray], default = None
-        Explicitly initialize the optimizer state.
-        If set to None if particles positions are initialized randomly.
     :param n_jobs: int, default = 1
         Number of parallel jobs to run during cross-validation.
          '-1' uses all available cores.
@@ -158,7 +158,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
     def fit(
             self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> Type['StochasticHillClimbing']:
+    ) -> Type['SpatialStochasticHillClimbing']:
         """
         Fit method optimizes the channel combination with
         Spatial Stochastic Hill Climbing.
@@ -172,7 +172,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
         Return:
         -----------
-        :return: Type['StochasticHillClimbing']
+        :return: Type['SpatialStochasticHillClimbing']
         """
         self.X_ = X
         self.y_ = y

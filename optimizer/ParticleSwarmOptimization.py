@@ -26,7 +26,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
     Implements Particle Swarm Optimization (PSO) to optimize
     the selection of channel combinations within a grid based on
     a specified performance metric. The implementation uses pyswarms
-    global and local PSO implementation PSO is a computational method
+    global and local PSO implementation. PSO is a computational method
     that optimizes a problem by iteratively trying to improve a
     candidate solution with regard to a given measure of quality.
 
@@ -49,7 +49,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
     or exploitative based on the relative weighting of these parameters.
 
 
-    The Local PSO employs a ring topology, where each particle is influenced
+    The local PSO employs a ring topology, where each particle is influenced
     by its local neighborhood's best performance rather than the global best.
     The position and velocity updates are similar to the global PSO:
         Position: xi(t+1) = xi(t) + vi(t+1)
@@ -109,13 +109,13 @@ class ParticleSwarmOptimization(BaseOptimizer):
         The center point influence in the topology of the swarm.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value
-        is below this for `patientce` iterations, the optimization will stop early.
+        is below this for `patience` iterations, the optimization will stop early.
     :param patience: int, default = int(1e5)
         The number of iterations for which the objective function
         improvement must be below `tol` to stop optimization.
     :param prior: Optional[numpy.ndarray], default = None
         Explicitly initialize the optimizer state.
-        If set to None if particles positions are initialized randomly.
+        If set to None, particles positions are initialized randomly.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
     :param seed: Optional[int], default = None

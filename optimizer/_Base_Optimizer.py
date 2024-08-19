@@ -357,7 +357,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin):  # _RoutingNotSupport
                 height = (result_grid['Height'] - 1) * ied + 0.5 * ed
                 result_grid['Area'] = width * height
         else:
-            UserWarning(f'Computation of the Area (using ied_ed = {ied_ed}) is only possible for SE and SSHC')
+            UserWarning(f'Computation of the Area (using ied_ed = {ied_ed}) is only possible for SES and SSHC')
 
         # Determine the x-axis bounds
         xlim_max, xlim_min = result_grid[target].max(), result_grid[target].min()

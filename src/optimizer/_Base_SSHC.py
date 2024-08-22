@@ -1,7 +1,8 @@
 # -------------------------------------------------------------
-# Channel Elimination
+# BCI-FeaST
 # Copyright (c) 2024
 #       Dirk Keller,
+#       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
@@ -10,13 +11,13 @@
 import random
 
 from copy import copy
-from typing import Tuple, List, Union, Dict, Any, Optional, Type
+from typing import Tuple, List, Union, Optional
 
 import numpy
 import numpy as np
 from tqdm import tqdm
 
-from ._utils import to_dict_keys, grid_to_channel_id
+from src.optimizer.backend._backend import to_dict_keys, grid_to_channel_id
 
 class RectangleSubgridExpansion:
     """

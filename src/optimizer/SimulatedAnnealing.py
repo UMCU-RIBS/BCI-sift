@@ -1,25 +1,23 @@
 # -------------------------------------------------------------
-# Channel Elimination
+# BCI-FeaST
 # Copyright (c) 2024
 #       Dirk Keller,
+#       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
 
-import random
-from typing import Tuple, List, Union, Dict, Any, Optional, Type
+from typing import Tuple, List, Union, Dict, Any, Optional
 
 import numpy
 import numpy as np
-import pandas as pd
 
 from scipy.optimize import dual_annealing
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
-from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
 from sklearn.base import BaseEstimator
 
-from ._utils import SimulatedAnnealingReporter
+from src.optimizer.backend._backend import SimulatedAnnealingReporter
 from ._Base_Optimizer import BaseOptimizer
 
 class SimulatedAnnealing(BaseOptimizer):

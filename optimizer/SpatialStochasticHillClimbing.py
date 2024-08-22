@@ -18,8 +18,9 @@ from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
 from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
+from sklearn.base import BaseEstimator
 
-from .utils import to_dict_keys, compute_subgrid_dimensions
+from ._utils import to_dict_keys, compute_subgrid_dimensions
 
 from ._Base_SSHC import SpatialStochasticHillClimbing as SSHC
 from ._Base_Optimizer import BaseOptimizer
@@ -35,9 +36,11 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
     -----------
     :param grid: numpy.ndarray
         The grid structure specifying how channels are arranged.
-    :param estimator: Union[Any, Pipeline]
+    :param estimator: Union[BaseEstimator, Pipeline]
         The machine learning estimator or pipeline to evaluate
         channel combinations.
+    :param estimator_params: Dict[str, any], default = {}
+        Optional parameters to adjust the estimator parameters.
     :param metric: str, default = 'f1_weighted'
         The metric to optimize, compatible with scikit-learn metrics.
     :param cv: Union[BaseCrossValidator, int], default = 10
@@ -66,6 +69,8 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         Seed for randomness, ensuring reproducibility.
     :param verbose: Union[bool, int], default = False
         Enables verbose output during the optimization process.
+    :param **kwargs: Dict[str, any]
+        Optional parameters to adjust the estimator parameters.
 
     Methods:
     --------
@@ -126,7 +131,8 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
             # General and Decoder
             grid: numpy.ndarray,
-            estimator: Union[Any, Pipeline],
+            estimator: Union[BaseEstimator, Pipeline],
+            estimator_params: Dict[str, Any],
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: numpy.ndarray = None,
@@ -142,10 +148,10 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
             # Misc
             n_jobs: int = 1,
             seed: Optional[int] = None,
-            verbose: Union[bool, int] = False
+            verbose: Union[bool, int] = False,
     ) -> None:
 
-        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose)
+        super().__init__(grid, estimator, estimator_params, metric, cv, groups, n_jobs, seed, verbose)
 
         # Spatial Stochastic Search Settings
         self.n_iter = n_iter
@@ -174,11 +180,14 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         -----------
         :return: Type['StochasticHillClimbing']
         """
-        self.X_ = X
-        self.y_ = y
+        self.X_, self.y_ = self._validate_data(
+            X, y, reset=False, **{'ensure_2d': False, 'allow_nd': True}
+        )
 
         self.iter_ = int(0)
         self.result_grid_ = []
+
+        self.set_estimator_params()
 
         # Set the seeds
         np.random.seed(self.seed)
@@ -191,7 +200,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
                     f'The argument prior {self.prior.shape} must match '
                     f'the number of cells of grid {self.grid.reshape(-1).shape}.')
 
-        self.solution_, self.mask_, self.score_ = self.run()
+        self.solution_, self.mask_, self.score_ = self._run()
 
         # Conclude the result grid (Calculate the Size and Height)
         self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
@@ -229,7 +238,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
         return X[:, self.mask_, :]
 
-    def run(
+    def _run(
             self
     ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
@@ -247,7 +256,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         """
         # Initialize and run the SSHC optimizer
         sshc = SSHC(
-            func=self.objective_function,
+            func=self._objective_function,
             channel_grid=self.grid,
             epsilon=self.epsilon,
             n_iter=self.n_iter,
@@ -264,7 +273,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         best_score = score * 100
         return solution, best_state, best_score
 
-    def objective_function(
+    def _objective_function(
             self, mask: Union[bool, numpy.ndarray], candidate_directions: List[numpy.ndarray],
             eval_hist: Dict[str, float]
     ) -> List[Tuple[numpy.ndarray, float]]:
@@ -299,12 +308,12 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
             # If not previously evaluated, perform evaluation on the data
             X_sub = self.X_[:, candidate_mask].reshape(self.X_.shape[0], -1)
-            scores = self.evaluate_candidates(X_sub)
+            scores = self._evaluate_candidates(X_sub)
 
             score = scores.mean()
             results.append((candidate_id, score))
 
-            self.save_statistics(candidate_mask.reshape(self.grid.shape), scores)
+            self._save_statistics(candidate_mask.reshape(self.grid.shape), scores)
 
         return results
 

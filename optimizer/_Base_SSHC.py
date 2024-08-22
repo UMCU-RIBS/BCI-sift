@@ -16,7 +16,7 @@ import numpy
 import numpy as np
 from tqdm import tqdm
 
-from .utils import to_dict_keys, grid_to_channel_id
+from ._utils import to_dict_keys, grid_to_channel_id
 
 class RectangleSubgridExpansion:
     """

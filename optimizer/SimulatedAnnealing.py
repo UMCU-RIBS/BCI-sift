@@ -17,8 +17,9 @@ from scipy.optimize import dual_annealing
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
+from sklearn.base import BaseEstimator
 
-from .utils import SimulatedAnnealingReporter
+from ._utils import SimulatedAnnealingReporter
 from ._Base_Optimizer import BaseOptimizer
 
 class SimulatedAnnealing(BaseOptimizer):
@@ -74,20 +75,22 @@ class SimulatedAnnealing(BaseOptimizer):
 
     Parameters:
     -----------
-    :param grid: numpy.ndarray
-        The grid structure specifying how channels (e.g., EEG sensors)
-         are arranged.
-    :param estimator: Union[Any, Pipeline]
+    :param dims: tuple
+        A tuple of dimensions indies tc apply the feature selection onto.
+        Any combination of dimensions can be specified, except for
+        dimension 'zero', which represents the samples.
+    :param estimator: Union[BaseEstimator, Pipeline]
         The machine learning estimator to evaluate channel combinations.
+    :param estimator_params: Optional[Dict[str, any]], default = None
+         Optional parameters to adjust the estimator parameters.
     :param metric: str, default = 'f1_weighted'
         The metric name to optimize, must be compatible with scikit-learn.
     :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
+        If an integer is passed, train_test_split() for 1 and
+        StratifiedKFold() is used for >1 as default.
     :param groups: numpy.ndarray, default = None
         Groups for LeaveOneGroupOut-crossvalidator
-    :param bounds: Optional[list of tuple(float, float)], default = None
-        Bounds for the variables during optimization. If None, defaults to
-        (0, 1) for each variable.
     :param n_iter: int, default = 1000
         The number of iterations for the simulated annealing process.
     :param initial_temp: float, default = 5230.0
@@ -103,15 +106,21 @@ class SimulatedAnnealing(BaseOptimizer):
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value
         is below this for `patience` iterations, the optimization will stop early.
+    :param bounds: Tuple[float, float]], default = (0.0, 1.0)
+        Bounds for the SA parameters to optimize. Since it is a binary
+        selection task, bounds are set to (0.0, 1.0)
     :param prior: Optional[numpy.ndarray], default = None
         Explicitly initialize the optimizer state.
-        If set to None if coordinates are initialized randomly.
+        If set to None if population characteristics are initialized
+        randomly within the bounds.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
     :param seed: Optional[int], default = None
         The random seed for initializing the random number generator.
     :param verbose: bool, default = False
         Enables verbose output during the optimization process.
+    :param **kwargs: Dict[str, any]
+        Optional parameters to adjust the estimator parameters.
 
     Methods:
     --------
@@ -189,14 +198,14 @@ class SimulatedAnnealing(BaseOptimizer):
             self,
 
             # General and Decoder
-            grid: numpy.ndarray,
-            estimator: Union[Any, Pipeline],
+            dims: tuple,
+            estimator: Union[BaseEstimator, Pipeline],
+            estimator_params: Optional[Dict[str, Any]] = None,
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: numpy.ndarray = None,
 
             # Simulated Annealing Settings
-            bounds: Optional[List[Tuple[float, float]]] = None,
             n_iter: int = 1000,
             initial_temp: float = 5230.0,
             restart_temp_ratio: float = 2.e-5,
@@ -206,8 +215,9 @@ class SimulatedAnnealing(BaseOptimizer):
 
             # Training Settings
             tol: float = 1e-5,
-            prior: Optional[numpy.ndarray] = None,
             # patience: int = int(1e5),
+            bounds: Tuple[float, float] = (0.0, 1.0),
+            prior: Optional[numpy.ndarray] = None,
 
             # Misc
             n_jobs: int = 1,
@@ -215,7 +225,9 @@ class SimulatedAnnealing(BaseOptimizer):
             verbose: bool = False
     ) -> None:
 
-        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose)
+        super().__init__(
+            dims, estimator, estimator_params, metric, cv, groups, bounds, prior, n_jobs, seed, verbose
+        )
 
         # Simulated Annealing Settings
         self.bounds = bounds
@@ -228,74 +240,10 @@ class SimulatedAnnealing(BaseOptimizer):
 
         # Training Settings
         self.tol = tol
-        self.prior = prior
         # self.patience = patience
 
-    def fit(self, X: numpy.ndarray, y: numpy.ndarray = None) -> Type['SimulatedAnnealing']:
-        """
-        Fit method optimizes the channel combination with Simulated Annealing.
 
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -----------
-        :return: Type['SimulatedAnnealing']
-        """
-        self.X_ = X
-        self.y_ = y
-
-        self.iter_ = int(0)
-        self.result_grid_ = []
-
-        self.prior_ = self.prior
-        if self.prior is not None:
-            if self.prior.shape != self.grid.reshape(-1).shape:
-                raise RuntimeError(
-                    f'The argument prior {self.prior.shape} must match '
-                    f'the number of cells of grid {self.grid.reshape(-1).shape}.')
-
-            self.prior_ = np.where(self.prior.astype(float) > 0.5, 0.51 + np.random.normal(loc=0, scale=0.06125),
-                                   0.49 - np.random.normal(loc=0, scale=0.06125))
-
-        self.bounds_ = self.bounds if self.bounds else [(0, 1) for _ in range(self.grid.size)]
-
-        np.random.seed(self.seed)
-        random.seed(self.seed)
-
-        self.solution_, self.mask_, self.score_ = self.run()
-
-        # Conclude the result grid
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
-        return self
-
-    def transform(self, X: numpy.ndarray, y: numpy.ndarray = None) -> numpy.ndarray:
-        """
-        Transforms the input with the mask obtained from the solution
-        of Simulated Annealing.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -----------
-        :return: numpy.ndarray
-            Returns a filtered array-like with dimensions
-            [samples, channel_height, channel_width, time]
-        """
-        sklearn_is_fitted(self)
-
-        return X[:, self.mask_, :]
-
-    def run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
+    def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
         Executes the simulated annealing optimization to find the best feature subset.
 
@@ -313,8 +261,47 @@ class SimulatedAnnealing(BaseOptimizer):
             'callback': callback, 'x0': self.prior_
         }
 
-        result = dual_annealing(lambda x: -self.objective_function(x), **method_args)
+        result = dual_annealing(lambda x: -self._objective_function(x), **method_args)
 
-        best_state = (result.x > 0.5).reshape(self.grid.shape)
+        best_state = (result.x > 0.5).reshape(self.dim_size_)  #self.grid.shape)
         best_score = -result.fun * 100
         return result.x, best_state, best_score
+
+    def _handle_bounds(
+            self
+    ) -> List[Tuple[float, float]]:
+        """
+        Returns the bounds for the SA optimizer. If bounds are not set, it returns default
+        bounds of (0, 1) for each dimension.
+
+        :return: List[Tuple[float, float]]
+            A list of tuples representing the lower and upper bounds for each dimension.
+        """
+        return [self.bounds for _ in range(np.prod(self.dim_size_))]
+
+    def _handle_prior(
+            self
+    ) -> Optional[np.ndarray]:
+        """
+        Generates a list of prior individuals based on a provided
+        prior mask. The function checks the validity of the prior
+        mask's shape, applies a Gaussian perturbation to the mask
+        values, and creates an array of bounds.
+
+        Returns:
+        --------
+        Optional[np.ndarray]:
+        A numpy array of transformed prior values, or None if no prior is provided.
+
+        """
+        # Determine the prior values from the mask if provided
+        prior = self.prior
+        if self.prior is not None:
+            if self.prior.shape != self.dim_size_: # self.grid.reshape(-1).shape:
+                raise RuntimeError(
+                    f'The argument prior must match the size of the dimensions to be considered.'
+                    f'Got {self.prior.shape} but expected {self.dim_size_}.')  # {self.grid.reshape(-1).shape}.')
+
+            prior = np.where(self.prior.astype(float) > 0.5, 0.51 + np.random.normal(loc=0, scale=0.06125),
+                                   0.49 - np.random.normal(loc=0, scale=0.06125))
+        return prior

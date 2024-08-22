@@ -21,6 +21,7 @@ from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
 from operator import attrgetter
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from tqdm import tqdm
+from sklearn.base import BaseEstimator
 
 from ._Base_Optimizer import BaseOptimizer
 
@@ -33,7 +34,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
     -----------
     :param grid: numpy.ndarray
         The grid structure specifying how channels are arranged.
-    :param estimator: Union[Any, Pipeline]
+    :param estimator: Union[BaseEstimator, Pipeline]
         The machine learning estimator or pipeline to evaluate
         channel combinations.
     :param metric: str, default = 'f1_weighted'
@@ -56,6 +57,8 @@ class RecursiveFeatureElimination(BaseOptimizer):
         Seed for randomness, ensuring reproducibility.
     :param verbose: Union[bool, int], default = False
         Enables verbose output during the optimization process.
+    :param **kwargs: Dict[str, any]
+        Optional parameters to adjust the estimator parameters.
 
     Methods:
     --------
@@ -92,7 +95,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
             # General and Decoder
             grid: numpy.array,
-            estimator: Union[Any, Pipeline],
+            estimator: Union[BaseEstimator, Pipeline],
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: numpy.ndarray = None,
@@ -106,9 +109,13 @@ class RecursiveFeatureElimination(BaseOptimizer):
             # Misc
             n_jobs: int = 1,
             seed: Optional[int] = None,
-            verbose: Union[bool, int] = False
+            verbose: Union[bool, int] = False,
+            **estimator_params: Dict[str, Any]
     ) -> None:
-        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose)
+
+        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose, **estimator_params)
+
+        # Recursive Feature Elimination Settings
         self.feature_retention_ratio = feature_retention_ratio
         self.step = step
         self.importance_getter = importance_getter
@@ -131,21 +138,24 @@ class RecursiveFeatureElimination(BaseOptimizer):
         -----------
         :return: Type['RecursiveFeatureElimination']
         """
-        self.X_ = X
-        self.y_ = y
+        self.X_, self.y_ = self._validate_data(
+            X, y, reset=False, **{'ensure_2d': False, 'allow_nd': True}
+        )
 
         self.iter_ = int(0)
         self.result_grid_ = []
         self.ranks_ = []
 
-        self.solution_, self.mask_, self.score_ = self.run()
+        self.set_estimator_params()
+
+        self.solution_, self.mask_, self.score_ = self._run()
 
         # Conclude the result grid
         self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
 
         return self
 
-    def objective_function(
+    def _objective_function(
             self, mask: numpy.ndarray
     ) -> float:
         """
@@ -163,12 +173,15 @@ class RecursiveFeatureElimination(BaseOptimizer):
             or -inf if no features are selected.
         """
         X_sub = self.X_[:, mask].reshape(self.X_.shape[0], -1)
-        scores = self.evaluate_candidates(X_sub)
-        self.save_statistics(copy(mask).reshape(self.grid.shape), scores)
+
+
+
+        scores = self._evaluate_candidates(X_sub)
+        self._save_statistics(copy(mask).reshape(self.grid.shape), scores)
 
         return scores.mean()
 
-    def evaluate_candidates(
+    def _evaluate_candidates(
             self, selected_features: numpy.ndarray
     ) -> numpy.ndarray:
         """
@@ -235,7 +248,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
         return X[:, self.mask_, :]
 
-    def run(
+    def _run(
             self
     ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
@@ -266,7 +279,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
             pbar = tqdm(pbar, desc="Recursive Feature Elimination", postfix={'best score': f'{best_score:.6f}'})
         for _ in pbar:
             features = np.arange(support_.size)[support_]
-            score = self.objective_function(mask)
+            score = self._objective_function(mask)
             weights = np.zeros((n_features,), dtype=int)
             weights[support_] = self.ranks_.argsort()  # the larger the better
             # make sure step wouldn't reduce number of features below n_target_features

@@ -8,7 +8,7 @@
 
 
 import random
-from typing import Tuple, List, Union, Dict, Any, Optional, Type
+from typing import Tuple, List, Union, Dict, Any, Optional, Type, Callable
 
 import numpy
 import numpy as np
@@ -18,8 +18,11 @@ from deap import base, creator, tools, algorithms
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
+from sklearn.base import BaseEstimator
+from tqdm import tqdm
 
 from ._Base_Optimizer import BaseOptimizer
+
 
 class EvolutionaryAlgorithms(BaseOptimizer):
     """
@@ -35,17 +38,21 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
     Parameters:
     -----------
-    :param grid: numpy.ndarray
-        Grid structure specifying how features (e.g., channels)
-         are arranged.
-    :param estimator: Union[Any, Pipeline]
+    :param dims: tuple
+        A tuple of dimensions indies tc apply the feature selection onto.
+        Any combination of dimensions can be specified, except for
+        dimension 'zero', which represents the samples.
+    :param estimator: Union[BaseEstimator, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
+    :param estimator_params: Optional[Dict[str, any]], default = None
+         Optional parameters to adjust the estimator parameters.
     :param metric: str, default = 'f1_weighted'
         The performance metric to optimize. Must be a
         valid scikit-learn scorer string.
     :param cv: Union[BaseCrossValidator, int], default = 10
-        The cross-validation strategy or number of folds
-        for cross-validation.
+        The cross-validation strategy or number of folds.
+        If an integer is passed, train_test_split() for 1 and
+        StratifiedKFold() is used for >1 as default.
     :param groups: numpy.ndarray, default = None
         Groups for LeaveOneGroupOut-crossvalidator
     :param population_size: int, default = 120
@@ -55,7 +62,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     :param islands: int, default = 1
         The number of separate populations (islands) used in
         parallel evolutionary processes.
-    :parammethod: str, default = 'simple'
+    :param method: str, default = 'simple'
         The evolutionary algorithm to use. Options include 'simple',
         'mu_plus_lambda', 'mu_lambda', 'generate_update'.
     :param crossover: str, default = 'two_point'
@@ -67,6 +74,12 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     :param selection: str, default = 'tournament'
         The method used to select individuals for the next generation.
          Options include 'tournament', 'roulette', 'nsga2', etc.
+    :param mu: int, default = 30
+        The number of individuals to select for the next generation
+        in 'mu_plus_lambda' and 'mu_lambda' methods.
+    :param lmbda: int, default = 60
+        The number of children to produce in 'mu_plus_lambda'
+        and 'mu_lambda' methods.
     :param migration_chance: float, default = 0.1
         The probability of migrating individuals among islands per generation.
     :param migration_size: int, default = 5
@@ -76,12 +89,6 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         The probability of mating two individuals (crossover probability).
     :param mutpb: float, default = 0.2
         The probability of mutating an individual (mutation probability).
-    :param mu: int, default = 30
-        The number of individuals to select for the next generation
-        in 'mu_plus_lambda' and 'mu_lambda' methods.
-    :param lmbda: int, default = 60
-        The number of children to produce in 'mu_plus_lambda'
-        and 'mu_lambda' methods.
     :param cx_indpb: float, default = 0.05
         The independent probability of each attribute being
         exchanged during crossover.
@@ -110,9 +117,13 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     :param patience: int, default = int(1e5)
         The number of iterations for which the objective function
         improvement must be below `tol` to stop optimization.
+    :param bounds: Tuple[float, float]], default = (0.0, 1.0)
+        Bounds for the EA parameters to optimze. Since it is a binary
+        selection task, bounds are set to (0.0, 1.0)
     :param prior: Optional[numpy.ndarray], default = None
         Explicitly initialize the optimizer state.
-        If set to None if population characteristics are initialized randomly.
+        If set to None if population characteristics are initialized
+        randomly within the bounds.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
     :param seed: Optional[int], default = None
@@ -142,8 +153,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     - migrate:
         Migrates individuals between islands based on the specified topology.
 
-    Notes
-    --------
+    Notes:
+    ------
     This implementation is semi-compatible with the scikit-learn framework,
     which builds around two-dimensional feature matrices. To use this
     transfortmation within a scikit-learn Pipeline, the four dimensional data
@@ -154,8 +165,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     MuCommaLambda algorithms as a non-stochastic selection will result in no  selection
     at all as the operator selects lambda individuals from a pool of mu.
 
-    References
-    --------
+    References:
+    -----------
     .. [1] Back, Fogel and Michalewicz, Evolutionary Computation 1 :
            Basic Algorithms and Operators, 2000.
     .. [2] Collette, Y., N. Hansen, G. Pujol, D. Salazar Aponte and R. Le Riche (2010).
@@ -163,8 +174,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
            In P. Breitkopf and R. F. Coelho, eds.: Multidisciplinary Design Optimization
            in Computational Mechanics, Wiley, pp. 527-565;
 
-    Examples
-    --------
+    Examples:
+    ---------
     The following example shows how to retrieve a feature mask for
     a synthetic data set.
 
@@ -196,8 +207,9 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             self,
 
             # General and Decoder
-            grid: numpy.ndarray,
-            estimator: Union[Any, Pipeline],
+            dims: tuple,
+            estimator: Union[BaseEstimator, Pipeline],
+            estimator_params: Optional[Dict[str, Any]] = None,
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: numpy.ndarray = None,
@@ -210,14 +222,14 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             crossover: str = 'two_point',
             mutate: str = 'flip',
             selection: str = 'tournament',
+            mu: int = 30,
+            lmbda: int = 60,
 
             # Crossover, Mutation, Selection adn Migration Parameters
             migration_chance: float = 0.1,
             migration_size: int = 5,
             cxpb: float = 0.5,
             mutpb: float = 0.2,
-            mu: int = 30,
-            lmbda: int = 60,
             cx_indpb: float = 0.05,
             cx_alpha: float = 0.3,
             cx_eta: float = 5,
@@ -232,6 +244,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             # Training Settings
             tol: float = 1e-5,
             patience: int = int(1e5),
+            bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
 
             # Misc
@@ -240,7 +253,9 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             verbose: bool = False
     ) -> None:
 
-        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose)
+        super().__init__(
+            dims, estimator, estimator_params, metric, cv, groups, bounds, prior, n_jobs, seed, verbose
+        )
 
         # Genetic Algorithm Settings
         self.population_size = population_size
@@ -272,140 +287,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         # Training Settings
         self.tol = tol
         self.patience = patience
-        self.prior = prior
 
-    def fit(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> Type['EvolutionaryAlgorithms']:
-        """
-        Fit method optimizes the channel combination with Evolutionary Algorithms.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -------
-        :return: Type['EvolutionaryAlgorithms']
-        """
-        self.X_ = X
-        self.y_ = y
-
-        self.iter_ = int(0)
-        self.result_grid_ = []
-
-        # Set the seeds
-        random.seed(self.seed)
-        np.random.seed(self.seed)
-
-        method_lib = {
-            'simple': (algorithms.eaSimple, {'cxpb': self.cxpb, 'mutpb': self.mutpb}),
-            'mu_plus_lambda': (algorithms.eaMuPlusLambda,
-                               {'cxpb': self.cxpb, 'mutpb': self.mutpb,
-                                'mu': self.mu, 'lambda_': self.lmbda}),
-            'mu_lambda': (algorithms.eaMuCommaLambda,
-                          {'cxpb': self.cxpb, 'mutpb': self.mutpb,
-                           'mu': self.mu, 'lambda_': self.lmbda}),
-            'generate_update': (algorithms.eaGenerateUpdate, {})
-        }
-        crossover_lib = {
-            'one_point': (tools.cxOnePoint, {}),
-            'two_point': (tools.cxTwoPoint, {}),
-            'uniform': (tools.cxUniform, {'indpb': self.cx_indpb}),
-            'part_matched': (tools.cxPartialyMatched, {}),
-            'uni_part_matched': (tools.cxUniformPartialyMatched, {}),
-            'ordered': (tools.cxOrdered, {}),
-            'blend': (tools.cxBlend, {'alpha': self.cx_alpha}),
-            'es_two_point': (tools.cxESTwoPoint, {'alpha': self.cx_alpha}),
-            'sim_binary': (tools.cxSimulatedBinary, {'eta': self.cx_eta}),
-            'messy_one_point': (tools.cxMessyOnePoint, {})
-        }
-        mutation_lib = {
-            'gaussian': (tools.mutGaussian,
-                         {'mu': self.mut_mu, 'sigma': self.mut_sigma, 'indpb': self.mut_indpb}),
-            'shuffle': (tools.mutShuffleIndexes, {'indpb': self.mut_indpb}),
-            'flip': (tools.mutFlipBit, {'indpb': self.mut_indpb}),
-            'es_log_normal': (tools.mutESLogNormal, {'c': self.mut_c, 'indpb': self.mut_indpb})
-        }
-        selection_lib = {
-            'tournament': (tools.selTournament, {'tournsize': self.sel_tournsize}),
-            'roulette': (tools.selRoulette, {}),
-            'nsga2': (tools.selNSGA2, {'nd': self.sel_nd}),
-            'spea2': (tools.selSPEA2, {}),
-            'best': (tools.selBest, {}),
-            'tournament_dcd': (tools.selTournamentDCD, {'nd': self.sel_nd}),
-            'stochastic_uni': (tools.selStochasticUniversalSampling, {}),
-            'lexicase': (tools.selLexicase, {}),
-            'epsilon_lexicase': (tools.selEpsilonLexicase, {}),
-            'auto_epsilon_lexicase': (tools.selAutomaticEpsilonLexicase, {})
-        }
-        self.method_ = method_lib[self.method]
-
-        crossover = crossover_lib[self.crossover]
-        mutation = mutation_lib[self.mutate]
-        selection = selection_lib[self.selection]
-
-        creator.create("FitnessMax", base.Fitness, weights=[1.0])
-        creator.create("Individual", list, fitness=creator.FitnessMax)
-
-        self.toolbox_ = base.Toolbox()  # TODO can be parallelized from scoop import futures toolbox.register("map", futures.map)
-        self.toolbox_.register("attr_bool", np.random.randint, 0, 2)
-        self.toolbox_.register("individual", tools.initRepeat, creator.Individual, self.toolbox_.attr_bool,
-                               n=self.grid.size)
-        self.toolbox_.register("population", tools.initRepeat, list, self.toolbox_.individual)
-
-        self.toolbox_.register("evaluate", self.objective_function_wrapper)
-        self.toolbox_.register("mate", crossover[0], **crossover[1])  # tools.cxTwoPoint)
-        self.toolbox_.register("mutate", mutation[0], **mutation[1])  # tools.mutFlipBit, indpb=0.05)
-        self.toolbox_.register("select", selection[0], **selection[1])  # tools.selTournament, tournsize=3)
-
-        self.prior_ = []
-        if self.prior is not None:
-            if self.prior.shape != self.grid.reshape(-1).shape:
-                raise RuntimeError(
-                    f'The argument prior {self.prior.shape} must match '
-                    f'the number of cells of grid {self.grid.reshape(-1).shape}.')
-            gaus = abs(np.random.normal(loc=0, scale=0.06125, size=self.prior.size))
-            self.prior_ = creator.Individual(
-                [0.49 - gaus[i] if x < 0.5 else 0.51 + gaus[i]
-                 for i, x in enumerate(([self.prior.astype(float)] * int(self.population_size * 0.2)))]
-            )
-
-        if self.islands == 1:
-            np.random.seed(self.seed)
-
-        self.solution_, self.mask_, self.score_ = self.run()
-
-        # Conclude the result grid
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
-        return self
-
-    def transform(self, X: numpy.ndarray, y: numpy.ndarray = None) -> numpy.ndarray:
-        """
-        Transforms the input with the mask obtained from the solution
-        of Evolutionary Algorithm.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -----------
-        :return: numpy.ndarray
-            Returns a filtered array-like with dimensions
-            [samples, channel_height, channel_width, time]
-        """
-        sklearn_is_fitted(self)
-
-        return X[:, self.mask_, :]
-
-    def run(
+    def _run(
             self
     ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
@@ -414,9 +297,13 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
         Returns:
         --------
-        :return Tuple[numpy.ndarray, numpy.ndarray, float]
-            The best found solution, mask and their fitness score.
+        :return Tuple[np.ndarray, numpy.ndarray, float]:
+            The best found solution, mask, and their fitness score.
         """
+
+        method, method_params = self._init_method()
+        toolbox = self._init_toolbox()
+
         stats = tools.Statistics(lambda ind: ind.fitness.values)
         stats.register("avg", np.mean)
         stats.register("std", np.std)
@@ -427,79 +314,73 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         best_score = 0
         wait = 0
 
-        if self.islands == 1:
+        # Initialize populations
+        populations = [toolbox.population(n=self.population_size - len(self.prior_)) for _ in range(self.islands)]
+        for pop in populations:
+            pop.extend(self.prior_)
 
-            population = self.toolbox_.population(n=self.population_size - len(self.prior_))
-            population.extend(self.prior_)
+        # Set up tqdm progress bar
+        progress_bar = tqdm(range(self.n_gen), desc=self.__class__.__name__, disable=not self.verbose, leave=True)
 
-            # Evolution process with single population
-            for gen in range(self.n_gen):
-                population, logbook = self.method_[0](population, self.toolbox_, ngen=1, stats=stats,
-                                                      halloffame=hof, verbose=False, **self.method_[1])
+        # Evolution process with or without migration
+        for gen in progress_bar:
+            for i, island in enumerate(populations):
+                # Optimize Feature Selection
+                populations[i], _ = method(populations[i], toolbox, ngen=1, stats=stats, halloffame=hof, verbose=False,
+                                     **method_params)
+
+            # Perform migration if applicable
+            if self.islands > 1 and self.migration_chance >= random.random() and gen > 0:
+                populations = self._migrate(populations, self.migration_size, topology='ring')
                 if self.verbose:
-                    if gen > 0:
-                        del logbook[0]
-                        logbook[0]['gen'] = gen + 1
-                        logbook.log_header = False
-                    print(f'{logbook.stream}')
-                if abs(best_score - hof.items[0].fitness.values[0]) > self.tol:
-                    best_score = hof.items[0].fitness.values[0]
-                    wait = 0
-                else:
-                    wait += 1
-                if wait > self.patience or hof.items[0].fitness.values[0] >= 1:
-                    print(f"Early stopping on generation {gen}")
-                    break
-            #
-            # best_individual = hof.items[0]
-        else:
+                    progress_bar.write(f'\nMigration occurred at generation {gen + 1}!\n')
 
-            populations = [self.toolbox_.population(n=self.population_size - len(self.prior_)) for _ in
-                           range(self.islands)]
-            populations = [pop.extend(self.prior_) for pop in populations]
+            # Update progress bar with current best score
+            progress_bar.set_postfix(best_score=hof.items[0].fitness.values[0])
 
-            # Evolution process with migration across multiple populations
-            for gen in range(self.n_gen):
-                # Evolve each population
-                for i, island in enumerate(populations):
-                    island, logbook = self.method_[0](island, self.toolbox_, ngen=1, stats=stats, halloffame=hof,
-                                                      verbose=False, **self.method_[1])
-
-                    if self.verbose:
-                        logbook[0]['island'], logbook[1]['island'] = i, i
-                        if gen > 0:
-                            del logbook[0]
-                            logbook[0]['gen'] = gen + 1
-                        if 'island' not in logbook.header:
-                            logbook.header.insert(2, 'island')
-                        if i > 0 or gen > 0:
-                            logbook.log_header = False
-                        print(f'{logbook.stream}')
-
-                    if abs(best_score - hof.items[0].fitness.values[0]) > self.tol:
-                        best_score = hof.items[0].fitness.values[0]
-                        wait = 0
-                    else:
-                        wait += 1
-                    if wait > self.patience or hof.items[0].fitness.values[0] >= 1:
-                        print(f"Early stopping on generation {gen}")
-                        break
-
-                    populations[i] = island
-
-                # Perform migration at specified intervals
-                if self.migration_chance >= random.random() and gen > 0:
-                    populations = self.migrate(populations, self.migration_size, topology='ring')
-
-                    if self.verbose:
-                        print(f'\nMigration occurred at generation {gen + 1}!\n')
+            # Early stopping criteria
+            if self._early_stopping(hof, best_score, wait):
+                break
 
         best_solution = np.array(hof.items[0]).reshape(-1)
-        best_state = np.array(hof.items[0]).reshape(self.grid.shape).astype(bool)
+        best_state = self._mask_to_input_dims(np.array(hof.items[0]).reshape(self.dim_size_).astype(bool))
         best_score = hof.items[0].fitness.values[0] * 100
         return best_solution, best_state, best_score
 
-    def objective_function_wrapper(
+    def _early_stopping(
+            self, hof: tools.HallOfFame, best_score: float, wait: int
+    ) -> Tuple[bool, float, int]:
+        """
+        Determines if early stopping should occur based
+        on the performance of the Hall of Fame individual.
+
+        Parameters:
+        -----------
+        :param hof: tools.HallOfFame
+            The Hall of Fame to keep track of the best individuals.
+        :param gen: int
+            The current generation number.
+        :param best_score : float
+            The current best score.
+        :param wait: int
+            The current count of generations without improvement.
+
+        Returns:
+        --------
+        :return: Tuple[bool, float, int]
+            A tuple indicating whether early stopping should occur (True/False),
+            the updated best score, and the updated wait count.
+        """
+        current_score = hof.items[0].fitness.values[0]
+        if abs(best_score - current_score) > self.tol:
+            wait = 0
+        else:
+            wait += 1
+        if wait > self.patience or current_score >= 1:
+            return True
+        return False
+
+    def _objective_function_wrapper(
             self, mask: numpy.ndarray
     ) -> List[float]:
         """
@@ -519,9 +400,9 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             the provided mask. Must have the same size as weights
             of the fitness function (e.g. size of one).
         """
-        return [self.objective_function(mask)]
+        return [self._objective_function(mask)]
 
-    def migrate(
+    def _migrate(
             self, islands: List[List[Any]], k: int, topology: str = 'ring'
     ) -> List[List[Any]]:
         """
@@ -552,3 +433,205 @@ class EvolutionaryAlgorithms(BaseOptimizer):
                 for emigrant in emigrants:
                     islands[i].remove(emigrant)
         return islands
+
+    def _handle_bounds(
+            self
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Returns the bounds for the EA optimizer. If bounds are not set, default bounds
+        of [0, 1] for each dimension are used.
+
+        Returns:
+        --------
+        :return: Tuple[np.ndarray, np.ndarray]
+            A tuple of two numpy arrays representing the lower and upper bounds.
+        """
+        return self.bounds
+        #     np.zeros(np.prod(self.dim_size_)), np.ones(np.prod(self.dim_size_))
+        # )
+
+
+    def _handle_prior(
+            self
+    ) -> Optional[List[Any]]:
+        """
+        Generates a list of prior individuals based on a provided
+        prior mask. The function checks the validity of the prior
+        mask's shape, applies a Gaussian perturbation to the mask
+        values, and creates DEAP individuals.
+
+        Returns:
+        --------
+        :returns: Optional[List[Any]]:
+            A list of DEAP `Individual` objects generated from the
+            prior mask. If no prior is provided, an empty list is returned.
+        """
+        prior = []
+        if self.prior:
+            if self.prior.shape != self.dim_size_:  # self.grid.reshape(-1).shape:
+                raise RuntimeError(
+                    f'The argument prior must match the size of the dimensions to be considered.'
+                    f'Got {self.prior.shape} but expected {self.dim_size_}.')
+            gaus = abs(np.random.normal(loc=0, scale=0.06125, size=self.prior.size))
+            prior = creator.Individual(
+                [0.49 - gaus[i] if x < 0.5 else 0.51 + gaus[i]
+                 for i, x in enumerate(([self.prior.astype(float)] * int(self.population_size * 0.2)))],
+                self.toolbox_.attr_bool, n=1
+            )
+        return prior
+
+    def _init_method(
+            self
+    ) -> Tuple[Callable, Dict[str, Any]]:
+        """
+        Returns the evolutionary algorithm method and its parameters.
+
+        Returns:
+        --------
+        :return: Tuple[Callable, Dict[str, Any]
+            A tuple containing the method function and a dictionary
+            of its parameters.
+        """
+
+        method_map = {
+            'simple': (
+                algorithms.eaSimple,
+                {'cxpb': self.cxpb, 'mutpb': self.mutpb}),
+            'mu_plus_lambda': (
+                algorithms.eaMuPlusLambda,
+                {'cxpb': self.cxpb, 'mutpb': self.mutpb,
+                 'mu': self.mu, 'lambda_': self.lmbda}),
+            'mu_lambda': (
+                algorithms.eaMuCommaLambda,
+                {'cxpb': self.cxpb, 'mutpb': self.mutpb,
+                 'mu': self.mu, 'lambda_': self.lmbda}),
+            'generate_update': (
+                algorithms.eaGenerateUpdate,
+                {})
+        }
+        return method_map[self.method]
+
+    def _init_crossover(
+            self,
+    ) -> Tuple[Callable, Dict[str, Any]]:
+        """
+        Returns the crossover function and its parameters.
+
+        Returns:
+        --------
+        :return: Tuple[Callable, Dict[str, Any]
+            A tuple containing the crossover function and a dictionary
+            of its parameters.
+        """
+
+        crossover_map = {
+            'one_point': (tools.cxOnePoint, {}),
+            'two_point': (tools.cxTwoPoint, {}),
+            'uniform': (tools.cxUniform, {'indpb': self.cx_indpb}),
+            'part_matched': (tools.cxPartialyMatched, {}),
+            'uni_part_matched': (tools.cxUniformPartialyMatched, {}),
+            'ordered': (tools.cxOrdered, {}),
+            'blend': (tools.cxBlend, {'alpha': self.cx_alpha}),
+            'es_two_point': (tools.cxESTwoPoint, {'alpha': self.cx_alpha}),
+            'sim_binary': (tools.cxSimulatedBinary, {'eta': self.cx_eta}),
+            'messy_one_point': (tools.cxMessyOnePoint, {})
+        }
+        return crossover_map[self.crossover]
+
+    def _init_mutation(
+            self,
+    ) -> Tuple[Callable, Dict[str, Any]]:
+        """
+        Returns the mutation function and its parameters.
+
+        Returns:
+        --------
+        :return: Tuple[Callable, Dict[str, Any]
+            A tuple containing the mutation function and a dictionary
+            of its parameters.
+        """
+        mutation_map = {
+            'gaussian': (tools.mutGaussian,
+                         {'mu': self.mut_mu, 'sigma': self.mut_sigma, 'indpb': self.mut_indpb}),
+            'shuffle': (tools.mutShuffleIndexes, {'indpb': self.mut_indpb}),
+            'flip': (tools.mutFlipBit, {'indpb': self.mut_indpb}),
+            'es_log_normal': (tools.mutESLogNormal, {'c': self.mut_c, 'indpb': self.mut_indpb})
+        }
+        return mutation_map[self.mutate]
+
+    def _init_selection(
+            self,
+    ) -> Tuple[Callable, Dict[str, Any]]:
+        """
+        Returns the selection function and its parameters.
+
+        Returns:
+        --------
+        :return: Tuple[Callable, Dict[str, Any]
+            A tuple containing the selection function and a dictionary
+            of its parameters.
+        """
+        selection_map = {
+            'tournament': (tools.selTournament, {'tournsize': self.sel_tournsize}),
+            'roulette': (tools.selRoulette, {}),
+            'nsga2': (tools.selNSGA2, {'nd': self.sel_nd}),
+            'spea2': (tools.selSPEA2, {}),
+            'best': (tools.selBest, {}),
+            'tournament_dcd': (tools.selTournamentDCD, {'nd': self.sel_nd}),
+            'stochastic_uni': (tools.selStochasticUniversalSampling, {}),
+            'lexicase': (tools.selLexicase, {}),
+            'epsilon_lexicase': (tools.selEpsilonLexicase, {}),
+            'auto_epsilon_lexicase': (tools.selAutomaticEpsilonLexicase, {})
+        }
+        return selection_map[self.selection]
+
+    def _init_toolbox(self) -> base.Toolbox:
+        """
+        Initializes the DEAP toolbox with fitness, individual,
+        and population registration, as well as the genetic operators:
+        crossover, mutation, and selection.
+
+        Returns:
+        --------
+        :return: base.Toolbox
+            The toolbox object that describes the specified
+            evolutionary process.
+        """
+        # Step 1: Create fitness and individual types
+        creator.create("FitnessMax", base.Fitness, weights=[1.0])
+        creator.create("Individual", list, fitness=creator.FitnessMax)
+
+        # Step 2: Initialize the toolbox
+        toolbox = base.Toolbox()
+
+        # Step 2: Register the attribute, individual, and population creation functions
+        toolbox.register("attr_bool", np.random.uniform, self.bounds_[0], self.bounds_[0])
+        toolbox.register("individual", tools.initRepeat, creator.Individual,
+                         toolbox.attr_bool, n=np.prod(self.dim_size_))
+        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+
+        # Step 3: Register the evaluation, crossover, mutation, and selection functions
+        toolbox.register("evaluate", self._objective_function_wrapper)
+        crossover, crossover_params = self._init_crossover()
+        toolbox.register("mate", crossover, **crossover_params)
+        mutation, mutation_params = self._init_mutation()
+        toolbox.register("mutate", mutation, **mutation_params)
+        selection, selection_params = self._init_selection()
+        toolbox.register("select", selection, **selection_params)
+
+        def clip_individual(individual):
+            """Clip the individual's values within the specified bounds."""
+            array = np.array(individual)
+            np.clip(array, self.bounds_[0], self.bounds_[1], out=array)
+            individual[:] = array.tolist()
+            return individual
+
+        # Decorate the mate and mutate functions with clipping
+        toolbox.decorate("mate", lambda func: lambda ind1, ind2, **kwargs: (
+            clip_individual(func(ind1, ind2, **kwargs)[0]), clip_individual(func(ind1, ind2, **kwargs)[1])
+        ))
+        toolbox.decorate("mutate", lambda func: lambda ind, **kwargs: (
+            clip_individual(func(ind, **kwargs)[0]),
+        ))
+
+        return toolbox

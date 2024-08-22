@@ -18,8 +18,10 @@ from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
 from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
+from sklearn.base import BaseEstimator
 
 from ._Base_Optimizer import BaseOptimizer
+
 
 class ParticleSwarmOptimization(BaseOptimizer):
     """
@@ -66,23 +68,25 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
     Parameters:
     -----------
-    :param grid: numpy.ndarray
-        The grid structure specifying how channels (e.g., EEG sensors)
-        are arranged.
-    :param estimator: Union[Any, Pipeline]
+    :param dims: tuple
+        A tuple of dimensions indies tc apply the feature selection onto.
+        Any combination of dimensions can be specified, except for
+        dimension 'zero', which represents the samples.
+    :param estimator: Union[BaseEstimator, Pipeline]
         The machine learning estimator to evaluate channel combinations.
+    :param estimator_params: Optional[Dict[str, any]], default = None
+         Optional parameters to adjust the estimator parameters.
     :param metric: str, default = 'f1_weighted'
         The metric name to optimize, must be compatible with scikit-learn.
-    :param cv: int, default = 10
+    :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
+        If an integer is passed, train_test_split() for 1 and
+        StratifiedKFold() is used for >1 as default.
     :param groups: numpy.ndarray, default = None
         Groups for LeaveOneGroupOut-crossvalidator
     :param method: str, default = 'global'
         The variant of PSO to use ('global' for global best PSO, 'local'
         for local best PSO).
-    :param bounds: Optional[Tuple[np.ndarray, np.ndarray]], default = None
-        Bounds for the PSO particles. Each particle position corresponds
-        to a channel.
     :param n_particles: int, default = 80
         The number of particles in the swarm.
     :param n_iter: int, default = 100
@@ -113,9 +117,13 @@ class ParticleSwarmOptimization(BaseOptimizer):
     :param patience: int, default = int(1e5)
         The number of iterations for which the objective function
         improvement must be below `tol` to stop optimization.
+    :param bounds: Tuple[float, float]], default = (0.0, 1.0)
+        Bounds for the PSO parameters to optimize. Since it is a binary
+        selection task, bounds are set to (0.0, 1.0)
     :param prior: Optional[numpy.ndarray], default = None
         Explicitly initialize the optimizer state.
-        If set to None if particles positions are initialized randomly.
+        If set to None if population characteristics are initialized
+        randomly within the bounds.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
     :param seed: Optional[int], default = None
@@ -192,15 +200,15 @@ class ParticleSwarmOptimization(BaseOptimizer):
             self,
 
             # General and Decoder
-            grid: numpy.ndarray,
-            estimator: Union[Any, Pipeline],
+            dims: tuple,
+            estimator: Union[BaseEstimator, Pipeline],
+            estimator_params: Optional[Dict[str, Any]] = None,
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: numpy.ndarray = None,
 
             # Particle Swarm Optimization Settings
             method: str = 'global',
-            bounds: Optional[Tuple[np.ndarray, np.ndarray]] = None,
             n_particles: int = 80,
             n_iter: int = 100,
 
@@ -219,6 +227,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
             # Training Settings
             tol: float = 1e-5,
             patience: int = int(1e5),
+            bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
 
             # Misc
@@ -226,7 +235,10 @@ class ParticleSwarmOptimization(BaseOptimizer):
             seed: Optional[int] = None,
             verbose: bool = False
     ) -> None:
-        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose)
+
+        super().__init__(
+            dims, estimator, estimator_params, metric, cv, groups, bounds, prior, n_jobs, seed, verbose
+        )
 
         # Particle Swarm Optimization Settings
         self.method = method
@@ -249,83 +261,8 @@ class ParticleSwarmOptimization(BaseOptimizer):
         # Training Settings
         self.tol = tol
         self.patience = patience
-        self.prior = prior
 
-    def fit(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> Type['ParticleSwarmOptimization']:
-        """
-        Fit method optimizes the channel combination with
-        Particle Swarm Optimisation.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -------
-        :return: Type['ParticleSwarmOptimization']
-        """
-        self.X_ = X
-        self.y_ = y
-
-        self.iter_ = int(0)
-        self.result_grid_ =  []
-
-        np.random.seed(self.seed)
-
-        self.total_features_ = self.grid.size
-        self.bounds_ = self.bounds if self.bounds else (
-            np.array([0] * self.total_features_), np.array([1] * self.total_features_))
-
-        self.prior_ = self.prior
-        if self.prior is not None:
-            if self.prior.shape != self.grid.reshape(-1).shape:
-                raise RuntimeError(
-                    f'The argument prior {self.prior.shape} must match '
-                    f'the number of cells of grid {self.grid.reshape(-1).shape}.')
-
-            particle_pos = np.tile(self.prior.astype(float), (self.n_particles, 1))
-            self.prior_ = np.array(
-                [np.where(x > 0.5, 0.51 + np.random.normal(loc=0, scale=0.06125),
-                          0.49 - np.random.normal(loc=0, scale=0.06125))
-                 for i, x in enumerate(list(particle_pos))]
-            )
-
-        self.solution_, self.mask_, self.score_, = self.run()
-
-        # Conclude the result grid
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
-        return self
-
-    def transform(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> numpy.ndarray:
-        """
-        Transforms the input with the mask obtained from
-        the solution of Particle Swarm Optimization.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -------
-        :return: numpy.ndarray
-            Returns a filtered array-like with dimensions
-            [samples, channel_height, channel_width, time]
-        """
-        sklearn_is_fitted(self)
-
-        return X[:, self.mask_, :]
-
-    def run(
+    def _run(
             self
     ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
@@ -336,27 +273,65 @@ class ParticleSwarmOptimization(BaseOptimizer):
         Tuple[numpy.ndarray, numpy.ndarray, float]
             The best solution, mask found and their score.
         """
-        # Initialize the PSO optimizer
-        method_args = {
-            'n_particles': self.n_particles, 'dimensions': self.total_features_,
-            'options': {'c1': self.c1, 'c2': self.c2, 'w': self.w, 'k': self.k, 'p': self.p}, 'bounds': self.bounds_,
-            'oh_strategy': self.oh_strategy, 'bh_strategy': self.bh_strategy, 'velocity_clamp': self.velocity_clamp,
-            'vh_strategy': self.vh_strategy, 'center': self.center, 'init_pos': self.prior_, 'ftol': self.tol,
-            'ftol_iter': self.patience
-        }
-        method_lib = {
-            'global': GlobalBestPSO(**method_args),
-            'local': LocalBestPSO(**method_args)
-        }
-        optimizer = method_lib[self.method]
+        # Initialize PSO algorithm
+        method = self._init_method()
 
-        cost, pos = optimizer.optimize(self.objective_function_wrapper, iters=self.n_iter, verbose=self.verbose)
-        # TODO can be parallelized
-        best_state = (pos > 0.5).reshape(self.grid.shape)
+        # Optimize Feature Selection
+        cost, pos = method.optimize(
+            self._objective_function_wrapper, iters=self.n_iter, verbose=self.verbose  # , n_processes=self.algo_cores_
+        )
+
+        best_state = self._mask_to_input_dims((pos > 0.5).reshape(self.dim_size_))  # (self.grid.shape)
         best_score = -cost * 100
         return pos, best_state, best_score
 
-    def objective_function_wrapper(
+    def _handle_bounds(
+            self
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Returns the bounds for the PSO optimizer. If bounds are not set, default bounds
+        of [0, 1] for each dimension are used.
+
+        Returns:
+        --------
+        :return: Tuple[np.ndarray, np.ndarray]
+            A tuple of two numpy arrays representing the lower and upper bounds.
+        """
+        return (
+            np.full(np.prod(self.dim_size_), self.bounds[0]),  # np.array([self.bounds[0]] * np.prod(self.dim_size_)),
+            np.full(np.prod(self.dim_size_), self.bounds[1])  # np.array(self.bounds[1] * np.prod(self.dim_size_))
+        )
+
+    def _handle_prior(
+            self
+    ) -> Optional[np.ndarray]:
+        """
+        Generates a list of prior individuals based on a provided
+        prior mask. The function checks the validity of the prior
+        mask's shape, applies a Gaussian perturbation to the mask
+        values, and creates an array of bounds for each particles.
+
+        Returns:
+        -------
+        :return: Optional[np.ndarray]
+            A numpy array of transformed prior values or None if no prior is provided.
+        """
+        prior = self.prior
+        if prior is not None:
+            if self.prior.shape != self.dim_size_:  # self.grid.reshape(-1).shape:
+                raise RuntimeError(
+                    f'The argument prior must match the size of the dimensions to be considered.'
+                    f'Got {self.prior.shape} but expected {self.dim_size_}.')  # {self.grid.reshape(-1).shape}.')
+
+            particle_pos = np.tile(self.prior.astype(float), (self.n_particles, 1))
+            prior = np.array(
+                [np.where(x > 0.5, 0.51 + np.random.normal(loc=0, scale=0.06125),
+                          0.49 - np.random.normal(loc=0, scale=0.06125))
+                 for i, x in enumerate(list(particle_pos))]
+            )
+        return prior
+
+    def _objective_function_wrapper(
             self, x: numpy.ndarray
     ) -> numpy.ndarray:
         """
@@ -374,4 +349,39 @@ class ParticleSwarmOptimization(BaseOptimizer):
         numpy.ndarray
             An array of fitness values for each particle in the swarm.
         """
-        return np.array([-self.objective_function(x[i]) for i in range(x.shape[0])])
+        return np.array([-self._objective_function(x[i]) for i in range(x.shape[0])])
+
+    def _init_method(
+            self
+    ) -> Union[GlobalBestPSO, LocalBestPSO]:
+        """
+        Initializes the PSO optimizer based on the specified method
+        and parameters.
+
+        :return: Union[GlobalBestPSO, LocalBestPSO]
+            The initialized PSO optimizer object.
+        """
+        # Prepare the arguments for the PSO optimizer
+        method_args = {
+            'n_particles': self.n_particles,
+            'dimensions': np.prod(self.dim_size_),
+            'options': {'c1': self.c1, 'c2': self.c2, 'w': self.w, 'k': self.k, 'p': self.p},
+            'bounds': self.bounds_,
+            'oh_strategy': self.oh_strategy,
+            'bh_strategy': self.bh_strategy,
+            'velocity_clamp': self.velocity_clamp,
+            'vh_strategy': self.vh_strategy,
+            'center': self.center,
+            'init_pos': self.prior_,
+            'ftol': self.tol,
+            'ftol_iter': self.patience
+        }
+
+        # Define the method library
+        method_lib = {
+            'global': GlobalBestPSO(**method_args),
+            'local': LocalBestPSO(**method_args)
+        }
+
+        # Return the appropriate optimizer based on the selected method
+        return method_lib[self.method]

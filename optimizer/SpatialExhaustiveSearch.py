@@ -13,8 +13,9 @@ import pandas as pd
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
+from sklearn.base import BaseEstimator
 
-from .utils import compute_subgrid_dimensions
+from ._utils import compute_subgrid_dimensions
 
 from ._Base_SES import SpatialExhaustiveSearch as SES
 from ._Base_Optimizer import BaseOptimizer
@@ -28,9 +29,11 @@ class SpatialExhaustiveSearch(BaseOptimizer):
     -----------
     :param grid: numpy.ndarray
         The grid structure specifying how channels are arranged.
-    :param estimator: Union[Any, Pipeline]
+    :param estimator: Union[BaseEstimator, Pipeline]
         The machine learning estimator or pipeline to evaluate
         channel combinations.
+    :param estimator_params: Dict[str, any], default = {}
+        Optional parameters to adjust the estimator parameters.
     :param metric: str, default = 'f1_weighted'
         The metric to optimize, compatible with scikit-learn metrics.
     :param cv: Union[BaseCrossValidator, int], default = 10
@@ -45,6 +48,8 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         Seed for randomness, ensuring reproducibility.
     :param verbose: Union[bool, int], default = False
         Enables verbose output during the optimization process.
+    :param **kwargs: Dict[str, any]
+        Optional parameters to adjust the estimator parameters.
 
     Methods:
     --------
@@ -107,7 +112,8 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
             # General and Decoder
             grid: numpy.array,
-            estimator: Union[Any, Pipeline],
+            estimator: Union[BaseEstimator, Pipeline],
+            estimator_params: Dict[str, Any] = {},
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: numpy.ndarray = None,
@@ -117,7 +123,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             seed: Optional[int] = None,
             verbose: Union[bool, int] = False
     ) -> None:
-        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose)
+        super().__init__(grid, estimator, estimator_params, metric, cv, groups, n_jobs, seed, verbose)
 
     def fit(
             self, X: numpy.ndarray, y: numpy.ndarray = None
@@ -137,13 +143,17 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         -----------
         :return: Type['SpatialExhaustiveSearch']
         """
-        self.X_ = X
-        self.y_ = y
+        self.X_, self.y_ = self._validate_data(
+            X, y, reset=False, **{'ensure_2d': False, 'allow_nd': True}
+        )
+
 
         self.iter_ = int(0)
         self.result_grid_ = []
 
-        self.solution_, self.mask_, self.score_ = self.run()
+        self.set_estimator_params()
+
+        self.solution_, self.mask_, self.score_ = self._run()
 
         # Conclude the result grid (Calculate the Size and Height)
         self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
@@ -181,7 +191,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
         return X[:, self.mask_, :]
 
-    def run(
+    def _run(
             self
     ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
@@ -199,7 +209,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         """
         # Initialize and run the SSHC optimizer
         es = SES(
-            func=self.objective_function,
+            func=self._objective_function,
             channel_grid=self.grid,
             verbose=self.verbose
         )

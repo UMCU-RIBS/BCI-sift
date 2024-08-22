@@ -38,7 +38,7 @@ from operator import attrgetter
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from tqdm import tqdm
 
-from utils import (
+from _utils import (
     SimulatedAnnealingReporter, to_dict_keys, channel_id_to_int,
     grid_to_channel_id, compute_subgrid_dimensions
 )

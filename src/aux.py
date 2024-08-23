@@ -11,19 +11,12 @@ import concurrent.futures
 import os
 import re
 from collections import defaultdict
-
 from typing import List, Dict
 
 import mne_bids
 import pandas as pd
 import scipy.io
-import scipy.io
-from sklearn.feature_selection import VarianceThreshold
 
-from matplotlib import pyplot as plt
-import seaborn as sns
-
-from ..src.optimizer.backend._backend import channel_id_to_int
 
 def convert_to_sub2run_dict(raws: list) -> Dict[str, List[any]]:
     """
@@ -120,7 +113,7 @@ def load_markers(marker_path: str, data_path: str) -> Dict[str, Dict[str, List[f
                    f'or "gammaSlopemarkers" (only for Gesture data set). Got {marker}')
 
     def load_mat_file(file_path: str, motor_strategy: Dict[str, str], sub_code: Dict[str, str], marker_id: str) -> \
-    tuple[str, Dict[str, List[float]]]:
+            tuple[str, Dict[str, List[float]]]:
         """
         Load onset markers from a single .mat file.
 

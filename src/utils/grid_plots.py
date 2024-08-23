@@ -9,23 +9,24 @@
 
 import os
 from copy import copy
+from typing import List, Tuple, Optional
 
+import matplotlib
 import numpy as np
+import pandas as pd
+import seaborn as sns
+from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 
-from typing import List, Dict, Union, Tuple, Optional
-
-import pandas as pd
-
-from matplotlib import pyplot as plt
-import seaborn as sns
-
 from src.optimizer.backend._backend import channel_id_to_int
+
+matplotlib.use('Agg')  # Use the 'Agg' backend for PNG rendering
+
 
 def elimination_plot(
         grid: np.ndarray, result_grid: pd.DataFrame, output_path: str,
-        identifier: str ='', ied_ed: Optional[Tuple[float, float]] = None, seed: Optional[int] = None,
+        identifier: str = '', ied_ed: Optional[Tuple[float, float]] = None, seed: Optional[int] = None,
 ) -> None:
     """
     Generates and saves a plot visualizing the maximum and all scores across
@@ -153,10 +154,11 @@ def elimination_plot(
                 bbox_inches='tight', dpi=100 + np.log(grid.size) * 200)
     plt.close()
 
+
 # f'{output_path}/_{condition}_{subject}_{target}_channel_elimination_plot.png'
 
 def importance_plot(
-        grid: np.ndarray, result_grid: pd.DataFrame, output_path: str, identifier: str ='',
+        grid: np.ndarray, result_grid: pd.DataFrame, output_path: str, identifier: str = '',
         viz='distribution', bads: Optional[List[str]] = None, top_k: int = 5
 ) -> None:
     """
@@ -191,7 +193,7 @@ def importance_plot(
     # Handle Dir
     os.makedirs(output_path, exist_ok=True)
 
-    metric = result_grid['Metric'].captilize(). replace('_', ' ')
+    metric = result_grid['Metric'].captilize().replace('_', ' ')
 
     result_grid['Mean (Score)'] *= 100  # Scale score for readability
     bad_channels = channel_id_to_int(bads)  # Bad channel IDs

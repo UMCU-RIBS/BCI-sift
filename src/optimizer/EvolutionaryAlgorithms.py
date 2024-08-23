@@ -337,7 +337,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             progress_bar.set_postfix(best_score=hof.items[0].fitness.values[0])
 
             # Early stopping criteria
-            if self._early_stopping(hof, best_score, wait):
+            stop, wait = self._early_stopping(hof, best_score, wait)
+            if stop:
                 break
 
         best_solution = np.array(hof.items[0]).reshape(-1)
@@ -347,7 +348,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
     def _early_stopping(
             self, hof: tools.HallOfFame, best_score: float, wait: int
-    ) -> Tuple[bool, float, int]:
+    ) -> Tuple[bool, int]:
         """
         Determines if early stopping should occur based
         on the performance of the Hall of Fame individual.
@@ -365,9 +366,9 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
         Returns:
         --------
-        :return: bool
-            A bool indicating whether early stopping should occur (True/False),
-            the updated best score, and the updated wait count.
+        :return: Tuple[bool, int]
+            A bool indicating whether early stopping should occur (True/False)
+            and the updated wait count.
         """
         # TODO fix the return
         current_score = hof.items[0].fitness.values[0]
@@ -376,8 +377,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         else:
             wait += 1
         if wait > self.patience or current_score >= 1:
-            return True
-        return False
+            return True, wait
+        return False, wait
 
     def _objective_function_wrapper(
             self, mask: numpy.ndarray

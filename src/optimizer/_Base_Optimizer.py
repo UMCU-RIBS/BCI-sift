@@ -241,48 +241,6 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
 
         return X * self.mask_
 
-    def predict(
-            self, X: numpy.ndarray
-    ) -> numpy.ndarray:
-        """
-        Uses the estimator to predict the labels from the data.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-
-        Return:
-        -------
-        :return: numpy.ndarray
-            Returns a filtered array-like with dimensions
-            [samples]
-        """
-        sklearn_is_fitted(self)
-
-        return self.estimator.predict(X)
-
-    def predict_proba(
-            self, X: numpy.ndarray
-    ) -> numpy.ndarray:
-        """
-        Uses the estimator to predict the probability of the labels from the data.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-
-        Return:
-        -------
-        :return: numpy.ndarray
-            Returns a filtered array-like with dimensions
-            [samples]
-        """
-        sklearn_is_fitted(self)
-
-        return self.estimator.predict_proba(X)
-
     def _run(
             self
     ) -> NotImplementedError:
@@ -325,10 +283,6 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         if len(mask.shape) > 1:
             mask = mask.ravel()  # .reshape(-1)
 
-        # Return -inf if no features are selected
-        if not np.any(mask):
-            return float('-inf')  # No features selected
-
         # Reshape the mask to align with the selected dimensions
         reshaped_mask = mask.reshape(self.dim_size_)[tuple(self.slices_)]
 
@@ -342,7 +296,6 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         scores = self._evaluate_candidates(selected_features)
 
         self._save_statistics(mask, scores)
-
         return scores.mean()
 
     def _evaluate_candidates(
@@ -368,10 +321,18 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
                 selected_features, self.y_, test_size=0.2, random_state=self.seed
             )
 
-            self.estimator.fit(X_train, y_train)
+            # Return -inf if no features are selected
+            if len(selected_features.shape) < 2:
+                return float('-inf')  # No features selected
+
+            estimator = copy(self.estimator).fit(X_train, y_train)
             scorer = get_scorer(self.metric)
-            scores = scorer(self.estimator, X_test, y_test)
+            scores = scorer(estimator, X_test, y_test)
         else:
+            # Return -inf if no features are selected
+            if len(selected_features.shape) < 2:
+                return np.full((self.num_cv_,), fill_value=float('-inf'))  # No features selected
+
             # TODO score + estimator
             scores = cross_val_score(self.estimator, selected_features, self.y_, scoring=get_scorer(self.metric),
                                      cv=self.cv, groups=self.groups, n_jobs=self.n_jobs)  # n_jobs=self.cv_cores_)

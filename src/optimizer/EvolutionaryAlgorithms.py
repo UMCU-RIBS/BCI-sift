@@ -9,17 +9,14 @@
 
 
 import random
-from typing import Tuple, List, Union, Dict, Any, Optional, Type, Callable
+from typing import Tuple, List, Union, Dict, Any, Optional, Callable
 
 import numpy
 import numpy as np
-import pandas as pd
 from deap import base, creator, tools, algorithms
-
+from sklearn.base import BaseEstimator
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
-from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
-from sklearn.base import BaseEstimator
 from tqdm import tqdm
 
 from ._Base_Optimizer import BaseOptimizer
@@ -328,7 +325,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             for i, island in enumerate(populations):
                 # Optimize Feature Selection
                 populations[i], _ = method(populations[i], toolbox, ngen=1, stats=stats, halloffame=hof, verbose=False,
-                                     **method_params)
+                                           **method_params)
 
             # Perform migration if applicable
             if self.islands > 1 and self.migration_chance >= random.random() and gen > 0:
@@ -368,10 +365,11 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
         Returns:
         --------
-        :return: Tuple[bool, float, int]
-            A tuple indicating whether early stopping should occur (True/False),
+        :return: bool
+            A bool indicating whether early stopping should occur (True/False),
             the updated best score, and the updated wait count.
         """
+        # TODO fix the return
         current_score = hof.items[0].fitness.values[0]
         if abs(best_score - current_score) > self.tol:
             wait = 0
@@ -437,20 +435,19 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
     def _handle_bounds(
             self
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[float, float]:
         """
         Returns the bounds for the EA optimizer. If bounds are not set, default bounds
         of [0, 1] for each dimension are used.
 
         Returns:
         --------
-        :return: Tuple[np.ndarray, np.ndarray]
+        :return: Tuple[float, float]
             A tuple of two numpy arrays representing the lower and upper bounds.
         """
         return self.bounds
         #     np.zeros(np.prod(self.dim_size_)), np.ones(np.prod(self.dim_size_))
         # )
-
 
     def _handle_prior(
             self
@@ -606,7 +603,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         toolbox = base.Toolbox()
 
         # Step 2: Register the attribute, individual, and population creation functions
-        toolbox.register("attr_bool", np.random.uniform, self.bounds_[0], self.bounds_[0])
+        toolbox.register("attr_bool", np.random.uniform, self.bounds_[0], self.bounds_[1])
         toolbox.register("individual", tools.initRepeat, creator.Individual,
                          toolbox.attr_bool, n=np.prod(self.dim_size_))
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)

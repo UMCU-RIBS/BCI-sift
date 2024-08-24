@@ -7,19 +7,18 @@
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
 
-from typing import Tuple, Union, Dict, Any, Optional, Type
+from typing import Tuple, Union, Dict, Any, Optional
 
 import numpy
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
-from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
-from sklearn.base import BaseEstimator
 
-from src.optimizer.backend._backend import compute_subgrid_dimensions
-
-from ._Base_SES import SpatialExhaustiveSearch as SES
 from ._Base_Optimizer import BaseOptimizer
+from ._Base_SES import SpatialExhaustiveSearch as SES
+from .backend._backend import compute_subgrid_dimensions
+
 
 class SpatialExhaustiveSearch(BaseOptimizer):
     """
@@ -28,13 +27,15 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
     Parameters:
     -----------
-    :param grid: numpy.ndarray
-        The grid structure specifying how channels are arranged.
+    :param dims: tuple
+        A tuple of dimensions indies tc apply the feature selection onto.
+        Any combination of dimensions can be specified, except for
+        dimension 'zero', which represents the samples.
     :param estimator: Union[BaseEstimator, Pipeline]
         The machine learning estimator or pipeline to evaluate
         channel combinations.
-    :param estimator_params: Dict[str, any], default = {}
-        Optional parameters to adjust the estimator parameters.
+    :param estimator_params: Optional[Dict[str, any]], default = None
+         Optional parameters to adjust the estimator parameters.
     :param metric: str, default = 'f1_weighted'
         The metric to optimize, compatible with scikit-learn metrics.
     :param cv: Union[BaseCrossValidator, int], default = 10
@@ -112,85 +113,25 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             self,
 
             # General and Decoder
-            grid: numpy.array,
-            estimator: Union[BaseEstimator, Pipeline],
-            estimator_params: Dict[str, Any] = {},
+            dims: tuple,
+            estimator: Union[Any, Pipeline],
+            estimator_params: Union[Dict[str, any], None] = None,
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: numpy.ndarray = None,
+
+            # Training Settings
+            bounds: Tuple[float, float] = (0.0, 1.0),
+            prior: Optional[numpy.ndarray] = None,
 
             # Misc
             n_jobs: int = 1,
             seed: Optional[int] = None,
             verbose: Union[bool, int] = False
     ) -> None:
-        super().__init__(grid, estimator, estimator_params, metric, cv, groups, n_jobs, seed, verbose)
-
-    def fit(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> Type['SpatialExhaustiveSearch']:
-        """
-        Fit method optimizes the channel combination with
-        Spatial Exhaustive Search.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -----------
-        :return: Type['SpatialExhaustiveSearch']
-        """
-        self.X_, self.y_ = self._validate_data(
-            X, y, reset=False, **{'ensure_2d': False, 'allow_nd': True}
+        super().__init__(
+            dims, estimator, estimator_params, metric, cv, groups, bounds, prior, n_jobs, seed, verbose
         )
-
-
-        self.iter_ = int(0)
-        self.result_grid_ = []
-
-        self.set_estimator_params()
-
-        self.solution_, self.mask_, self.score_ = self._run()
-
-        # Conclude the result grid (Calculate the Size and Height)
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
-        self.result_grid_[['Height', 'Width']] = self.result_grid_['Mask'].apply(
-            lambda mask: pd.Series(compute_subgrid_dimensions(mask))
-        )
-        columns = list(self.result_grid_.columns)
-        size_index = columns.index('Size')
-        new_order = columns[:size_index + 1] + ['Height', 'Width'] + columns[size_index + 1:-2]
-        self.result_grid_ = self.result_grid_[new_order]
-
-        return self
-
-    def transform(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> numpy.ndarray:
-        """
-        Transforms the input with the mask obtained from
-        the solution of Spatial Exhaustive Search.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -----------
-        :return: numpy.ndarray
-            Returns a filtered array-like with dimensions
-            [samples, channel_height, channel_width, time]
-        """
-        sklearn_is_fitted(self)
-
-        return X[:, self.mask_, :]
 
     def _run(
             self
@@ -208,15 +149,74 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
             A tuple with the solution, mask, the evaluation scores and the optimization history.
         """
+
+        if len(self.dims) > 2:
+            raise RuntimeError(
+                f"SpatialExhaustiveSearch algorithm requires 'dims' to have"
+                f"exactly 2 dimensions. Got {len(self.dims)}."
+            )
+
+        grid_dimensions = np.array(self.X_.shape)[np.array(self.dims)]
+        grid = np.arange(1, np.prod(grid_dimensions) + 1).reshape(grid_dimensions)
+
         # Initialize and run the SSHC optimizer
-        es = SES(
+        ses = SES(
             func=self._objective_function,
-            channel_grid=self.grid,
+            channel_grid=grid,
             verbose=self.verbose
         )
-        score, mask = es.run()
+        score, mask = ses.run()
 
         solution = mask.reshape(-1).astype(float)
         best_state = mask
         best_score = score * 100
         return solution, best_state, best_score
+
+    def _handle_bounds(
+            self
+    ) -> None:
+        """
+        Placeholder method for handling bounds.
+
+        Returns:
+        -------
+        :returns: None
+        """
+
+    def _handle_prior(
+            self
+    ) -> None:
+        """
+        Placeholder method for handling prior.
+
+        Returns:
+        -------
+        :returns: None
+        """
+
+    def _prepare_result_grid(
+            self
+    ) -> None:
+        """
+        Finalizes the result grid. For the Spatial Algorithm, the height
+        and width of the included area is added.
+
+        Returns:
+        --------
+        returns: None
+        """
+
+        # Concatenate the result grid along the rows (axis=0) and reset the index
+        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
+
+        # Compute the height and width for each mask and assign them to the result grid
+        self.result_grid_[['Height', 'Width']] = self.result_grid_['Mask'].apply(
+            lambda mask: pd.Series(compute_subgrid_dimensions(mask.reshape(
+                tuple(np.array(self.X_.shape)[np.array(self.dims)]))))
+        )
+
+        # Reorder the columns to place 'Height' and 'Width' after 'Size'
+        columns = list(self.result_grid_.columns)
+        size_index = columns.index('Size')
+        new_order = columns[:size_index + 1] + ['Height', 'Width'] + columns[size_index + 1:-2]
+        self.result_grid_ = self.result_grid_[new_order]

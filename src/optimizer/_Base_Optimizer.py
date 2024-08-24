@@ -147,6 +147,27 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         self.seed = seed
         self.verbose = verbose
 
+    def _reset(self):
+        """Reset internal data-dependent state of the scaler, if necessary.
+
+        __init__ parameters are not touched.
+        """
+        # Checking one attribute is enough, because they are all set together
+        # in partial_fit
+        if hasattr(self, "X_"):
+            del self.X_
+            del self.y_
+            del self.iter_
+            del self.result_grid_
+            del self.n_cv_
+            del self.dims_incl_
+            del self.dim_size_
+            del self.prior_
+            del self.bounds_
+            del self.solution_
+            del self.mask_
+            del self.score_
+
     def fit(
             self, X: numpy.ndarray, y: numpy.ndarray = None
     ) -> Type['BaseOptimizer']:
@@ -165,6 +186,9 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         -------
         :return: Type['BaseOptimizer']
         """
+        # Reset internal state before fitting
+        self._reset()
+
         # Validate data
         self.X_, self.y_ = self._validate_data(
             X, y, reset=False, **{'ensure_2d': False, 'allow_nd': True}
@@ -187,10 +211,8 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
 
         # Get the number of splits to apply the correct method in
         # _evaluate_candidates
-        self.num_cv_ = self.cv if isinstance(self.cv, int) else self.cv.get_n_splits()
+        self.n_cv_ = self.cv if isinstance(self.cv, int) else self.cv.get_n_splits()
 
-        # Get the number of splits to apply the correct method in _evaluate_candidates
-        self.num_cv_ = self.cv if isinstance(self.cv, int) else self.cv.get_n_splits()
         # TODO  Calculate CPU resource allocation for parallelization
         #  n = self.n_iter
         #  (self.cv_cores_, self.algo_cores_) = self.allocate_cpu_resources(self.num_cv_, n)
@@ -215,7 +237,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         self.solution_, self.mask_, self.score_ = self._run()
 
         # Conclude the result grid
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
+        self._prepare_result_grid()
         return self
 
     def transform(
@@ -315,23 +337,23 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             The evaluation scores for the selected features.
         """
         # TODO cv < 1 for train test split ratio
-        if self.num_cv_ == 1:
+        if self.n_cv_ == 1:
+            # Return -inf if no features are selected
+            if len(selected_features.shape) < 2 or np.sum(selected_features) == 0.0:
+                return float('-inf')  # No features selected
+
             # Use train-test split instead of cross-validation
             X_train, X_test, y_train, y_test = train_test_split(
                 selected_features, self.y_, test_size=0.2, random_state=self.seed
             )
-
-            # Return -inf if no features are selected
-            if len(selected_features.shape) < 2:
-                return float('-inf')  # No features selected
 
             estimator = copy(self.estimator).fit(X_train, y_train)
             scorer = get_scorer(self.metric)
             scores = scorer(estimator, X_test, y_test)
         else:
             # Return -inf if no features are selected
-            if len(selected_features.shape) < 2:
-                return np.full((self.num_cv_,), fill_value=float('-inf'))  # No features selected
+            if len(selected_features.shape) < 2 or np.sum(selected_features) == 0.0:
+                return np.full((self.n_cv_,), fill_value=float('-inf'))  # No features selected
 
             # TODO score + estimator
             scores = cross_val_score(self.estimator, selected_features, self.y_, scoring=get_scorer(self.metric),
@@ -364,7 +386,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         new_row = {
             'Method': self.__class__.__name__,
             'Iteration': self.iter_,
-            'Mask': [mask],
+            'Mask': [mask],  # .reshape(tuple(np.array(self.X_.shape)[np.array(self.dims)])),
             # TODO 'Channel IDs': to_dict_keys(channel_ids),
             'Size': mask.size  # TODO len(channel_ids)
         }
@@ -403,7 +425,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
 
     def _handle_prior(
             self
-    ) -> Optional[np.ndarray]:
+    ) -> NotImplementedError:
         """
         Handles the prior values by validating their shape and applying transformations if provided.
 
@@ -472,7 +494,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         Returns:
         --------
         :return: np.ndarray
-            The full mask broadcasted to match the shape of the data tensor.
+            The full mask is broadcasted to match the shape of the data tensor.
         """
         # Reshape the mask to align with the selected dimensions
         reshaped_mask = mask.reshape(self.dim_size_)[tuple(self.slices_)]
@@ -564,3 +586,18 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             else:
                 # Re-raise the exception if it's not related to dimensionality
                 raise e
+
+    def _prepare_result_grid(
+            self
+    ) -> None:
+        """
+        Finalizes the result grid. For the Spatial Algorithm, the height
+        and width of the included area is added.
+
+        Returns:
+        --------
+        returns: None
+        """
+
+        # Concatenate the result grid along the rows (axis=0) and reset the index
+        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)

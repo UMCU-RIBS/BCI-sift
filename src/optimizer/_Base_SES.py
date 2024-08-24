@@ -9,14 +9,13 @@
 
 
 from copy import copy
-from typing import Tuple, List, Union, Dict, Any, Optional, Type
-
+from typing import Tuple, List
 
 import numpy
 import numpy as np
 from sklearn.base import TransformerMixin, MetaEstimatorMixin
-
 from tqdm import tqdm
+
 
 class SpatialExhaustiveSearch(MetaEstimatorMixin, TransformerMixin):
     """
@@ -46,7 +45,6 @@ class SpatialExhaustiveSearch(MetaEstimatorMixin, TransformerMixin):
         self.channel_grid = channel_grid
         self.objective = func
         self.verbose = verbose
-        # self.result_grid = pd.DataFrame()
 
     def run(
             self
@@ -74,11 +72,9 @@ class SpatialExhaustiveSearch(MetaEstimatorMixin, TransformerMixin):
 
         mask_template = np.zeros_like(self.channel_grid, dtype=bool)
 
-        pbar = range(len(subgrids))
-        if self.verbose:
-            pbar = tqdm(pbar, desc="Spatial Exhaustive Search", postfix={'score': f'{best_score:.6f}'})
+        progress_bar = tqdm(range(len(subgrids)), desc=self.__class__.__name__, disable=not self.verbose, leave=True)
 
-        for idx in pbar:
+        for idx in progress_bar:
             start_row, start_col, end_row, end_col = subgrids[idx]
             mask = copy(mask_template)
 
@@ -92,8 +88,7 @@ class SpatialExhaustiveSearch(MetaEstimatorMixin, TransformerMixin):
                 best_score = score
                 best_mask = mask
 
-            if self.verbose:
-                pbar.set_postfix({'score': f"{best_score:.6f}"})
+            progress_bar.set_postfix({'score': f"{best_score:.6f}"})
 
         return best_score, best_mask
 

@@ -6,26 +6,31 @@
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
 
+import math
+import multiprocessing
 import os
 import time
-import multiprocessing
-import math
-from typing import Dict, Any, Union, Tuple
+import warnings
+from copy import copy
+from typing import Dict, Any, Union
 
 import ray
 from ray import tune
 from ray.tune.schedulers import AsyncHyperBandScheduler, MedianStoppingRule
+from ray.tune.search.ax import AxSearch
 from ray.tune.search.hebo import HEBOSearch
 from ray.tune.search.skopt import SkOptSearch
-from ray.tune.search.ax import AxSearch
-
-from sklearn.pipeline import Pipeline
 from sklearn.base import BaseEstimator
-from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import get_scorer
-
-import warnings
 from sklearn.exceptions import ConvergenceWarning
+from sklearn.metrics import get_scorer
+from sklearn.pipeline import Pipeline
+
+if False:  # torch.cuda.is_available(): # False: #
+    device = 'cuda'
+    from cuml.model_selection import StratifiedKFold
+else:
+    device = 'cpu'
+    from sklearn.model_selection import StratifiedKFold
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -74,7 +79,7 @@ class TrainTransformer(tune.Trainable):
     A Ray Tune Trainable class that handles training and evaluation of a model pipeline.
 
     Attributes:
-        estimator (BaseEstimator): The estimator to be trained.
+        fs_transformer (BaseEstimator): The estimator to be trained.
         X (Any): The input features.
         y (Any): The target labels.
         metric (str): The metric used for evaluation.
@@ -87,16 +92,22 @@ class TrainTransformer(tune.Trainable):
         _global_best_score (float): The best score achieved.
     """
 
-    def setup(self, config: Dict[str, Any], object_store_ref: Dict[str, ray.ObjectRef], fold_generator: StratifiedKFold,
-              metric: str) -> None:
-        self.estimator: BaseEstimator = ray.get(object_store_ref['estimator'])
+    def setup(
+            self, config: Dict[str, Any], object_store_ref: Dict[str, ray.ObjectRef], fold_generator: StratifiedKFold,
+            metric: str
+    ) -> None:
+        self.fs_transformer = ray.get(object_store_ref['estimator'])
         self.X, self.y = ray.get(object_store_ref['data'])
+
+        if device == 'cuda':
+            self._gpu_id = ray.get_gpu_ids()[0]
 
         self.metric = metric
         self.scorer = get_scorer(self.metric)
         self.cv_indices = fold_generator.split(self.X, self.y)
 
-        self.mean = 0.0
+        self.mean = 0
+
         self.iter = 1
 
         self._build(config)
@@ -107,14 +118,22 @@ class TrainTransformer(tune.Trainable):
         self._global_best_score = 0.0
 
     def step(self) -> Dict[str, Union[float, bool]]:
-        self.estimator.set_params(**self._estimator_params)
+        self.fs_transformer.set_params(**self._estimator_params)
+
+        fs_transformer = copy(self.fs_transformer)
+
+        # iterate through the folds
+        train_index, test_index = next(self.cv_indices)
 
         with PerfTimer() as train_timer:
-            trained_model = self.estimator.fit(self.X, self.y)
+            # X_filtered = self.fs_transformer.fit_transform(self.X[train_index], self.y[train_index])
+            X_filtered = fs_transformer.fit_transform(self.X, self.y)
+            trained_model = fs_transformer.estimator.fit(X_filtered, self.y)
         training_time = train_timer.duration
 
         with PerfTimer() as inference_timer:
-            test_score = self.scorer(trained_model, self.X, self.y)
+            X_filtered = fs_transformer.transform(self.X[test_index])
+            test_score = self.scorer(trained_model, X_filtered, self.y[test_index])
         infer_time = inference_timer.duration
 
         self.mean += (test_score - self.mean) / self.iter
@@ -122,7 +141,7 @@ class TrainTransformer(tune.Trainable):
 
         if self.mean > self._global_best_score:
             self._global_best_score = test_score
-            self._global_best_model = trained_model
+            self._global_best_model = fs_transformer
 
         return {
             str(self.metric): self.mean,
@@ -142,7 +161,7 @@ class TrainTransformer(tune.Trainable):
         pass
 
     def reset_config(self, new_config: Dict[str, Any]) -> bool:
-        del self.estimator
+        del self.fs_transformer
         self._build(new_config)
         self.config = new_config
         return True
@@ -179,7 +198,7 @@ class DecoderOptimization:
             max_concurrent: int = 10,
             search_scheduler: str = 'AsyncHyperBand',
             search_optimizer: str = 'HEBO',
-            device = 'cpu',
+            device='cpu',
     ) -> None:
         self.estimator = estimator
         self.param_dist = param_dist

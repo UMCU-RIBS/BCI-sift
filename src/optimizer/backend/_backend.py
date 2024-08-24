@@ -8,8 +8,7 @@
 # -------------------------------------------------------------
 
 import re
-
-from typing import Tuple, List, Union, Dict, Any, Optional, Type
+from typing import Tuple, List, Union, Dict, Any
 
 import numpy
 import numpy as np
@@ -103,6 +102,7 @@ def pso_maxp_stopper(x, f):
     if f <= -1:
         return False  # Return False to stop the optimization
     return True  # Continue optimization
+
 
 def to_dict_keys(
         arr: numpy.ndarray
@@ -207,6 +207,14 @@ def compute_subgrid_dimensions(
     """
     true_indices = np.argwhere(mask)
 
+    # Check if there are any True values in the mask
+    if true_indices.size == 0:
+        return 0, 0
+
+    # Check if the mask is 2D and handle accordingly
+    if true_indices.shape[1] < 2:
+        raise ValueError("The mask is not a 2D array or does not contain valid True values.")
+
     min_row_idx, max_row_idx = true_indices[:, 0].min(), true_indices[:, 0].max()
     min_col_idx, max_col_idx = true_indices[:, 1].min(), true_indices[:, 1].max()
 
@@ -245,6 +253,7 @@ class FlattenTransformer(BaseEstimator, TransformerMixin):
         # Reshape X to (n_samples, -1), collapsing all dimensions after the first
         n_samples = X.shape[0]
         return X.reshape(n_samples, -1)
+
 
 class SafeVarianceThreshold(BaseEstimator, TransformerMixin):
     """

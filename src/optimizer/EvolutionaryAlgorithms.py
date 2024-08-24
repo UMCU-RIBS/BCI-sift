@@ -309,7 +309,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         stats.register("max", np.max)
 
         hof = tools.HallOfFame(1)
-        best_score = 0
+        best_score = 0.0
         wait = 0
 
         # Initialize populations
@@ -330,10 +330,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             # Perform migration if applicable
             if self.islands > 1 and self.migration_chance >= random.random() and gen > 0:
                 populations = self._migrate(populations, self.migration_size, topology='ring')
-                if self.verbose:
-                    progress_bar.write(f'\nMigration occurred at generation {gen + 1}!\n')
 
-            # Update progress bar with current best score
+            # Update progress bar with the current best score
             progress_bar.set_postfix(best_score=hof.items[0].fitness.values[0])
 
             # Early stopping criteria

@@ -27,7 +27,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: tuple
+    :param dims: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
@@ -42,7 +42,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         Cross-validation splitting strategy, can be a fold number
         or a scikit-learn cross-validator.
     :param groups: numpy.ndarray, default = None
-        Groups for LeaveOneGroupOut-crossvalidator
+        Groups for LeaveOneGroupOut-crossvalidator.
     :param n_jobs: int, default = 1
         Number of parallel jobs to run during cross-validation.
          '-1' uses all available cores.
@@ -113,7 +113,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             self,
 
             # General and Decoder
-            dims: tuple,
+            dims: Tuple[int, ...],
             estimator: Union[Any, Pipeline],
             estimator_params: Union[Dict[str, any], None] = None,
             metric: str = 'f1_weighted',
@@ -152,7 +152,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
         if len(self.dims) > 2:
             raise RuntimeError(
-                f"SpatialExhaustiveSearch algorithm requires 'dims' to have"
+                f"{self.__class__.__name__} algorithm requires 'dims' to have"
                 f"exactly 2 dimensions. Got {len(self.dims)}."
             )
 
@@ -198,7 +198,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             self
     ) -> None:
         """
-        Finalizes the result grid. For the Spatial Algorithm, the height
+        Finalizes the result grid. For the Spatial Exhaustive Search, the height
         and width of the included area is added.
 
         Returns:

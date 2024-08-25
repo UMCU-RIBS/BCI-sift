@@ -9,7 +9,6 @@
 
 
 import random
-
 from copy import copy
 from typing import Tuple, List, Union, Optional
 
@@ -18,6 +17,7 @@ import numpy as np
 from tqdm import tqdm
 
 from src.optimizer.backend._backend import to_dict_keys, grid_to_channel_id
+
 
 class RectangleSubgridExpansion:
     """
@@ -332,23 +332,36 @@ class SpatialStochasticHillClimbing:
             init_pos = self.channel_grid[prior_mask].flatten()
 
         wait = 0
-        best_score, best_mask = 0, None
-        pbar = range(self.n_iter)
-        if self.verbose:
-            pbar = tqdm(pbar, desc="Spatial Stochastic Hill Climbing", postfix={'score': f'{best_score:.6f}'})
+        best_score, best_mask = 0.0, None
+
+        progress_bar = tqdm(range(self.n_iter), desc=self.__class__.__name__, disable=not self.verbose, leave=True)
 
         # Main loop over the number of starting positions
         starts = self.set_start(init_pos, self.n_iter)
-        for _ in pbar:
+        for _ in progress_bar:
             start = int(np.random.choice(starts, size=1, replace=False))
             rse = RectangleSubgridExpansion(self.channel_grid, start)
 
             # Evaluate start position
-            result = self.objective(np.full(shape=self.channel_grid.shape, fill_value=False),
-                                    list(map(lambda x: x.reshape((1, 2)), rse.incl_channels)),
-                                    self.eval_hist)
-            self.eval_hist[str(self.channel_grid[rse.incl_channels[0, 0], rse.incl_channels[0, 1]])] = np.round(
-                np.mean(result[0][1]), 8)
+            # Evaluate each combination and store the results
+            results = []
+            candidate_directions = list(map(lambda x: x.reshape((1, 2)), rse.incl_channels))
+            mask = np.full(shape=self.channel_grid.shape, fill_value=False)
+            for candidate_id in candidate_directions:
+                candidate_mask = copy(mask)
+                candidate_mask[candidate_id[:, 0], candidate_id[:, 1]] = True  # Temporarily include the candidate
+
+                # Generate a key for eval_hist to check if this configuration was already evaluated
+                channel_ids = to_dict_keys(self.channel_grid[candidate_mask].flatten())
+                if channel_ids in self.eval_hist:
+                    results.append((candidate_id, self.eval_hist[channel_ids]))
+                    continue
+
+                score = self.objective(candidate_mask)
+                results.append((candidate_id, score))
+
+                self.eval_hist[str(self.channel_grid[rse.incl_channels[0, 0], rse.incl_channels[0, 1]])] = np.round(
+                    np.mean(results[0][1]), 8)
 
             # Expansion process using stochastic hill-climbing
             while len(rse.incl_channels) < rse.mask.size:
@@ -362,8 +375,8 @@ class SpatialStochasticHillClimbing:
                 if score > best_score:
                     best_score = score
                     best_mask = copy(rse.mask)
-                if self.verbose:
-                    pbar.set_postfix({'score': f"{best_score:.6f}"})
+
+                progress_bar.set_postfix({'score': f"{best_score:.6f}"})
                 if abs(best_score - score) > self.tol:
                     wait = 0
                 else:

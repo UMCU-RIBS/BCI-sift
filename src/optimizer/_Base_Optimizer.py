@@ -23,7 +23,7 @@ from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection import cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
-from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
+from sklearn.utils.validation import check_is_fitted
 
 from src.optimizer.backend._backend import FlattenTransformer, SafeVarianceThreshold
 
@@ -167,6 +167,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             del self.solution_
             del self.mask_
             del self.score_
+            del self.is_fitted_
 
     def fit(
             self, X: numpy.ndarray, y: numpy.ndarray = None
@@ -238,6 +239,9 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
 
         # Conclude the result grid
         self._prepare_result_grid()
+
+        # Store fitted status
+        self.is_fitted_ = True
         return self
 
     def transform(
@@ -259,7 +263,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         :return: numpy.ndarray
             Returns a sparse representation of the input tensor.
         """
-        sklearn_is_fitted(self)
+        check_is_fitted(self, 'is_fitted_')
 
         return X * self.mask_
 

@@ -41,7 +41,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
 
     Parameters:
     -----------
-    :param dims: tuple
+    :param dims: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
@@ -113,7 +113,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             self,
 
             # General and Decoder
-            dims: tuple,
+            dims: Tuple[int, ...],
             estimator: Union[Any, Pipeline],
             estimator_params: Union[Dict[str, any], None] = None,
             metric: str = 'f1_weighted',
@@ -279,7 +279,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         raise NotImplementedError('The run method must be implemented by subclasses')
 
     def _objective_function(
-            self, mask: numpy.ndarray
+            self, mask: numpy.ndarray, **kwargs
     ) -> float:
         """
         Objective function that calculates the score to maximize/minimize.

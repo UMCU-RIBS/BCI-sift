@@ -15,7 +15,7 @@ class RandomSearch(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: tuple
+    :param dims: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
@@ -47,7 +47,7 @@ class RandomSearch(BaseOptimizer):
             self,
 
             # General and Decoder
-            dims: tuple,
+            dims: Tuple[int, ...],
             estimator: Union[Any, Pipeline],
             estimator_params: Union[Dict[str, any], None] = None,
             metric: str = 'f1_weighted',

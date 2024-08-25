@@ -7,19 +7,16 @@
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
 
-from typing import Tuple, List, Union, Dict, Any, Optional, Type
+from typing import Tuple, Union, Dict, Any, Optional
 
 import numpy
 import numpy as np
-import pandas as pd
-
+from pyswarms.discrete import BinaryPSO
 from pyswarms.single import GlobalBestPSO, LocalBestPSO
-from sklearn.model_selection import BaseCrossValidator
-
-from sklearn.pipeline import Pipeline
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
-from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
 from sklearn.base import BaseEstimator
+from sklearn.model_selection import BaseCrossValidator
+from sklearn.pipeline import Pipeline
 
 from ._Base_Optimizer import BaseOptimizer
 
@@ -69,7 +66,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: tuple
+    :param dims: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
@@ -201,7 +198,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
             self,
 
             # General and Decoder
-            dims: tuple,
+            dims: Tuple[int, ...],
             estimator: Union[BaseEstimator, Pipeline],
             estimator_params: Optional[Dict[str, Any]] = None,
             metric: str = 'f1_weighted',
@@ -381,7 +378,8 @@ class ParticleSwarmOptimization(BaseOptimizer):
         # Define the method library
         method_lib = {
             'global': GlobalBestPSO(**method_args),
-            'local': LocalBestPSO(**method_args)
+            'local': LocalBestPSO(**method_args),
+            'binary': BinaryPSO(**method_args)
         }
 
         # Return the appropriate optimizer based on the selected method

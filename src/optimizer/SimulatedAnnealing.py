@@ -11,14 +11,14 @@ from typing import Tuple, List, Union, Dict, Any, Optional
 
 import numpy
 import numpy as np
-
 from scipy.optimize import dual_annealing
+from sklearn.base import BaseEstimator
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
-from sklearn.base import BaseEstimator
 
 from src.optimizer.backend._backend import SimulatedAnnealingReporter
 from ._Base_Optimizer import BaseOptimizer
+
 
 class SimulatedAnnealing(BaseOptimizer):
     """
@@ -73,7 +73,7 @@ class SimulatedAnnealing(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: tuple
+    :param dims: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
@@ -196,7 +196,7 @@ class SimulatedAnnealing(BaseOptimizer):
             self,
 
             # General and Decoder
-            dims: tuple,
+            dims: Tuple[int, ...],
             estimator: Union[BaseEstimator, Pipeline],
             estimator_params: Optional[Dict[str, Any]] = None,
             metric: str = 'f1_weighted',
@@ -240,7 +240,6 @@ class SimulatedAnnealing(BaseOptimizer):
         self.tol = tol
         # self.patience = patience
 
-
     def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
         Executes the simulated annealing optimization to find the best feature subset.
@@ -261,7 +260,7 @@ class SimulatedAnnealing(BaseOptimizer):
 
         result = dual_annealing(lambda x: -self._objective_function(x), **method_args)
 
-        best_state = (result.x > 0.5).reshape(self.dim_size_)  #self.grid.shape)
+        best_state = (result.x > 0.5).reshape(self.dim_size_)  # self.grid.shape)
         best_score = -result.fun * 100
         return result.x, best_state, best_score
 
@@ -295,11 +294,11 @@ class SimulatedAnnealing(BaseOptimizer):
         # Determine the prior values from the mask if provided
         prior = self.prior
         if self.prior is not None:
-            if self.prior.shape != self.dim_size_: # self.grid.reshape(-1).shape:
+            if self.prior.shape != self.dim_size_:  # self.grid.reshape(-1).shape:
                 raise RuntimeError(
                     f'The argument prior must match the size of the dimensions to be considered.'
                     f'Got {self.prior.shape} but expected {self.dim_size_}.')  # {self.grid.reshape(-1).shape}.')
 
             prior = np.where(self.prior.astype(float) > 0.5, 0.51 + np.random.normal(loc=0, scale=0.06125),
-                                   0.49 - np.random.normal(loc=0, scale=0.06125))
+                             0.49 - np.random.normal(loc=0, scale=0.06125))
         return prior

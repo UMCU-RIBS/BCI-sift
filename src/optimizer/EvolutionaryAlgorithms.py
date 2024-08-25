@@ -36,7 +36,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: tuple
+    :param dims: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
@@ -205,7 +205,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             self,
 
             # General and Decoder
-            dims: tuple,
+            dims: Tuple[int, ...],
             estimator: Union[BaseEstimator, Pipeline],
             estimator_params: Optional[Dict[str, Any]] = None,
             metric: str = 'f1_weighted',

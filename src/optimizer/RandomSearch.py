@@ -98,7 +98,8 @@ class RandomSearch(BaseOptimizer):
         for _ in progress_bar:
 
             # Set up the mask to operate on
-            mask = np.random.randint(0, 2, size=np.prod(self.dim_size_))
+            # mask = np.random.randint(0, 2, size=np.prod(self.dim_size_))
+            mask = np.random.uniform(self.bounds_[0], self.bounds[1], size=np.prod(self.dim_size_))
 
             # Evaluate the selected subset
             score = self._objective_function(mask)

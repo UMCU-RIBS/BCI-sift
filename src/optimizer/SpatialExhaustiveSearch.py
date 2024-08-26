@@ -151,7 +151,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         """
 
         if len(self.dims) > 2:
-            raise RuntimeError(
+            raise ValueError(
                 f"{self.__class__.__name__} algorithm requires 'dims' to have"
                 f"exactly 2 dimensions. Got {len(self.dims)}."
             )

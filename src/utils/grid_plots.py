@@ -65,12 +65,13 @@ def elimination_plot(
     result_grid = copy(result_grid)
     result_grid['Mean (Score)'] *= 100  # Scale score for readability
 
-    metric = result_grid['Metric'].capitalize().replace('_', ' ')
+    metric = result_grid['Metric'][0].capitalize().replace('_', ' ')
 
     target = 'Size'
     x_label = 'Grid Size (channels)'
     if ied_ed is not None:
-        if result_grid['Method'] in ['SpatialExhaustiveSearch', 'SpatialStochasticHillClimbing']:
+        if all([method in ['SpatialExhaustiveSearch', 'SpatialStochasticHillClimbing']
+                for method in set(result_grid['Method'].values)]):
             target = 'Area'
             x_label = 'Grid Size (in $mm^{2}$)'
 
@@ -78,8 +79,8 @@ def elimination_plot(
             width = (result_grid['Width'] - 1) * ied + 0.5 * ed
             height = (result_grid['Height'] - 1) * ied + 0.5 * ed
             result_grid['Area'] = width * height
-    else:
-        UserWarning(f'Computation of the Area (using ied_ed = {ied_ed}) is only possible for SE and SSHC')
+        else:
+            UserWarning(f'Computation of the Area (using ied_ed = {ied_ed}) is only possible for SES and SSHC')
 
     # Determine the x-axis bounds
     xlim_max, xlim_min = result_grid[target].max(), result_grid[target].min()
@@ -91,14 +92,14 @@ def elimination_plot(
     # Create figure and gridspec layout
     width, height = 4 * (grid.size / 32), 8
     fig = plt.figure(figsize=(width, height))
-    grid = plt.GridSpec(2, 2, hspace=0.2 / height, wspace=0.2 / width,
-                        height_ratios=(1, 8), width_ratios=(4 * (grid.size / 32), 1))
+    grid_plot = plt.GridSpec(2, 2, hspace=0.2 / height, wspace=0.2 / width,
+                             height_ratios=(1, 8), width_ratios=(4 * (grid.size / 32), 1))
 
     # Main plot
-    ax_main = fig.add_subplot(grid[1:, :-1])
+    ax_main = fig.add_subplot(grid_plot[1:, :-1])
     # Marginal plots
-    ax_top_marginal = fig.add_subplot(grid[0, :-1], sharex=ax_main)
-    ax_right_marginal = fig.add_subplot(grid[1:, -1], sharey=ax_main)
+    ax_top_marginal = fig.add_subplot(grid_plot[0, :-1], sharex=ax_main)
+    ax_right_marginal = fig.add_subplot(grid_plot[1:, -1], sharey=ax_main)
 
     # Main plots
     sns.scatterplot(data=result_grid, x=target, y='Mean (Score)', hue='Iteration', alpha=0.5,  # label='All Grids',
@@ -150,7 +151,7 @@ def elimination_plot(
 
     # Save the figure
     plt.tight_layout()
-    plt.savefig(f'{output_path}/{identifier}_channel_elimination_plot.png',
+    plt.savefig(f'{output_path}/{identifier}_{target}_channel_elimination_plot.png',
                 bbox_inches='tight', dpi=100 + np.log(grid.size) * 200)
     plt.close()
 
@@ -193,18 +194,19 @@ def importance_plot(
     # Handle Dir
     os.makedirs(output_path, exist_ok=True)
 
-    metric = result_grid['Metric'].captilize().replace('_', ' ')
+    metric = result_grid['Metric'][0].capitalize().replace('_', ' ')
 
+    result_grid = copy(result_grid)
+    new_column = result_grid['Mask'].apply(lambda x: grid[x.reshape(grid.shape)])
+    result_grid.insert(2, 'Channel IDs', new_column)
+    # result_grid['Channel IDs'] = result_grid['Mask'].apply(lambda x: grid[x.reshape(grid.shape)])
     result_grid['Mean (Score)'] *= 100  # Scale score for readability
     bad_channels = channel_id_to_int(bads)  # Bad channel IDs
-
-    # Compute grid sizes and add as a column in result_grid
-    result_grid['Grid Size'] = result_grid['Channel IDs'].apply(lambda ids: len(ids.split('-')))
 
     # Sort by score and select top k grids
     top_grids = result_grid.nlargest(top_k, 'Mean (Score)')
 
-    top_channels_list = [set(int(i) for i in grid['Channel IDs'].split('-')) for _, grid in top_grids.iterrows()]
+    top_channels_list = [np.array(grid) for grid in top_grids['Channel IDs']]
 
     # Weighted average scores for each channel ID
     weighted_scores = {}
@@ -212,7 +214,8 @@ def importance_plot(
         for channel_id in row:
             # Extract rows containing the current channel_id and calculate weighted score
             channel_rows = result_grid[
-                result_grid['Channel IDs'].apply(lambda ids: channel_id in [int(i) for i in ids.split('-')])]
+                result_grid['Channel IDs'].apply(lambda ids: channel_id in [int(i) for i in ids])]
+
             weighted_score = np.average(channel_rows['Mean (Score)'])  # , weights=1 / channel_rows['Grid Size'])
             weighted_scores[channel_id] = weighted_score
 
@@ -228,7 +231,7 @@ def importance_plot(
         for channel_id in row:
             # Extract rows containing the current channel_id
             channel_rows = result_grid[
-                result_grid['Channel IDs'].apply(lambda ids: channel_id in [int(i) for i in ids.split('-')])]
+                result_grid['Channel IDs'].apply(lambda ids: channel_id in [int(i) for i in ids])]
             scores = channel_rows['Mean (Score)'].values
             channel_scores_dist[channel_id] = scores
 

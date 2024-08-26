@@ -344,24 +344,11 @@ class SpatialStochasticHillClimbing:
 
             # Evaluate start position
             # Evaluate each combination and store the results
-            results = []
             candidate_directions = list(map(lambda x: x.reshape((1, 2)), rse.incl_channels))
-            mask = np.full(shape=self.channel_grid.shape, fill_value=False)
-            for candidate_id in candidate_directions:
-                candidate_mask = copy(mask)
-                candidate_mask[candidate_id[:, 0], candidate_id[:, 1]] = True  # Temporarily include the candidate
+            results = self.local_neighbourhood_search(rse, candidate_directions=candidate_directions)
 
-                # Generate a key for eval_hist to check if this configuration was already evaluated
-                channel_ids = to_dict_keys(self.channel_grid[candidate_mask].flatten())
-                if channel_ids in self.eval_hist:
-                    results.append((candidate_id, self.eval_hist[channel_ids]))
-                    continue
-
-                score = self.objective(candidate_mask)
-                results.append((candidate_id, score))
-
-                self.eval_hist[str(self.channel_grid[rse.incl_channels[0, 0], rse.incl_channels[0, 1]])] = np.round(
-                    np.mean(results[0][1]), 8)
+            self.eval_hist[str(self.channel_grid[rse.incl_channels[0, 0], rse.incl_channels[0, 1]])] = np.round(
+                np.mean(results[0][1]), 8)
 
             # Expansion process using stochastic hill-climbing
             while len(rse.incl_channels) < rse.mask.size:
@@ -408,15 +395,35 @@ class SpatialStochasticHillClimbing:
 
         # Exploitation: Evaluate all candidates and choose the best
         if random.uniform(0, 1) > self.e_init:
-            results = self.objective(rse.mask, candidate_directions, self.eval_hist)
+            results = self.local_neighbourhood_search(rse, candidate_directions)
+            # results = self.objective(rse.mask, candidate_directions, self.eval_hist)
             new_chan, score = max(results, key=lambda x: x[1])
 
         # Exploration: Randomly choose a direction and evaluate
         else:
             random_choice = random.randint(0, len(candidate_directions) - 1)
             candidate_directions = [candidate_directions[random_choice]]
-            new_chan, score = self.objective(rse.mask, candidate_directions, self.eval_hist)[0]
+            [(new_chan, score)] = self.local_neighbourhood_search(rse, candidate_directions)
+            # new_chan, score = self.objective(rse.mask, candidate_directions, self.eval_hist)[0]
         return new_chan, score
+
+    def local_neighbourhood_search(self, rse, candidate_directions):
+
+        results = []
+        # mask = np.full(shape=self.channel_grid.shape, fill_value=False)
+        for candidate_id in candidate_directions:
+            candidate_mask = copy(rse.mask)
+            candidate_mask[candidate_id[:, 0], candidate_id[:, 1]] = True  # Temporarily include the candidate
+
+            # Generate a key for eval_hist to check if this configuration was already evaluated
+            channel_ids = to_dict_keys(self.channel_grid[candidate_mask].flatten())
+            if channel_ids in self.eval_hist:
+                results.append((candidate_id, self.eval_hist[channel_ids]))
+                continue
+
+            score = self.objective(candidate_mask)
+            results.append((candidate_id, score))
+        return results
 
     @staticmethod
     def set_start(

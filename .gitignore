@@ -1,10 +1,10 @@
-/src/aux.py
+/experiments/finger_classification/aux.py
 /config/
-/src/config.py
-/src/preprocessing.py
-/src/main_speechdecoding.py
+/experiments/finger_classification/config.py
+/experiments/finger_classification/preprocessing.py
+/experiments/speech_classification/main_speechdecoding.py
 /src/inprogress_scikit-learn DL/
-/src/main.py
+/experiments/finger_classification/main.py
 /data/
-/src/misc/
+/experiments/finger_classification/misc/
 /output/

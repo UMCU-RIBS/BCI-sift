@@ -6,7 +6,6 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-
 import random
 import warnings
 from copy import copy
@@ -319,6 +318,22 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
 
         selected_features = self.X_ * full_mask
 
+        # Apply the sigmoid function to the mask
+        # mask = 1 / (1 + np.exp(-np.array(mask)))
+        #
+        # # Flatten the mask if it has more than 1 dimension
+        # if len(mask.shape) > 1:
+        #     mask = mask.ravel()
+        #
+        # # Reshape the mask to align with the selected dimensions
+        # reshaped_mask = mask.reshape(self.dim_size_)[tuple(self.slices_)]
+        #
+        # # Broadcast the mask of the considered dimensions to the full mask matching the data tensor
+        # full_mask = np.broadcast_to(reshaped_mask, self.X_.shape)
+        # mm = MinMaxScaler(feature_range=(self.bounds_[0], self.bounds_[1]))
+        # X = self.X_.reshape(self.X_.shape[0], -1)
+        # selected_features = mm.fit_transform(X) * full_mask.reshape(self.X_.shape[0], -1)
+
         scores = self._evaluate_candidates(selected_features)
 
         self._save_statistics(mask, scores)
@@ -340,11 +355,11 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         :return: numpy.ndarray
             The evaluation scores for the selected features.
         """
-        # TODO cv < 1 for train test split ratio
+
         if self.n_cv_ == 1:
             # Return -inf if no features are selected
             if len(selected_features.shape) < 2 or np.sum(selected_features) == 0.0:
-                return float('-inf')  # No features selected
+                return np.full((1,), fill_value=0.0)  # No features selected
 
             # Use train-test split instead of cross-validation
             X_train, X_test, y_train, y_test = train_test_split(
@@ -357,7 +372,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         else:
             # Return -inf if no features are selected
             if len(selected_features.shape) < 2 or np.sum(selected_features) == 0.0:
-                return np.full((self.n_cv_,), fill_value=float('-inf'))  # No features selected
+                return np.full((self.n_cv_,), fill_value=0.0)  # No features selected
 
             # TODO score + estimator
             scores = cross_val_score(self.estimator, selected_features, self.y_, scoring=get_scorer(self.metric),
@@ -391,13 +406,13 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             'Method': self.__class__.__name__,
             'Iteration': self.iter_,
             'Mask': [mask],  # .reshape(tuple(np.array(self.X_.shape)[np.array(self.dims)])),
-            # TODO 'Channel IDs': to_dict_keys(channel_ids),
-            'Size': mask.size  # TODO len(channel_ids)
+            'Size': np.sum(mask),  # TODO len(channel_ids)
+            'Metric': self.metric
         }
 
         cv = self.cv if isinstance(self.cv, int) else self.cv.get_n_splits(groups=self.groups)
         if cv == 1:
-            new_row['TrainTest (Score)'] = scores  # To maintain consistency with the CV case
+            new_row['Mean (Score)'] = scores  # To maintain consistency with the CV case
         else:
             ci = stats.t.interval(0.95, len(scores) - 1, loc=np.mean(scores), scale=stats.sem(scores))
             cv_stats = {

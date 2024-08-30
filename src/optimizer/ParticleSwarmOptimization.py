@@ -14,11 +14,10 @@ import numpy as np
 from pyswarms.discrete import BinaryPSO
 from pyswarms.single import GlobalBestPSO, LocalBestPSO
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
-from sklearn.base import BaseEstimator
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 
-from ._Base_Optimizer import BaseOptimizer
+from .Base_Optimizer import BaseOptimizer
 
 
 class ParticleSwarmOptimization(BaseOptimizer):
@@ -70,17 +69,17 @@ class ParticleSwarmOptimization(BaseOptimizer):
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
-    :param estimator: Union[BaseEstimator, Pipeline]
-        The machine learning estimator to evaluate channel combinations.
+    :param estimator: Union[Any, Pipeline]
+        The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Optional[Dict[str, any]], default = None
          Optional parameters to adjust the estimator parameters.
     :param metric: str, default = 'f1_weighted'
-        The metric name to optimize, must be compatible with scikit-learn.
+        The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
         If an integer is passed, train_test_split() for 1 and
         StratifiedKFold() is used for >1 as default.
-    :param groups: numpy.ndarray, default = None
+    :param groups: Optional[numpy.ndarray], default = None
         Groups for LeaveOneGroupOut-crossvalidator
     :param method: str, default = 'global'
         The variant of PSO to use ('global' for global best PSO, 'local'
@@ -112,22 +111,24 @@ class ParticleSwarmOptimization(BaseOptimizer):
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value
         is below this for `patientce` iterations, the optimization will stop early.
-    :param patience: int, default = int(1e5)
+    :param patience: int, default = 1e5
         The number of iterations for which the objective function
         improvement must be below `tol` to stop optimization.
-    :param bounds: Tuple[float, float]], default = (0.0, 1.0)
-        Bounds for the PSO parameters to optimize. Since it is a binary
-        selection task, bounds are set to (0.0, 1.0)
+    :param bounds: Tuple[float, float], default = (0.0, 1.0)
+        Bounds for the algorithm's parameters to optimize. Since
+        it is a binary selection task, bounds are set to (0.0, 1.0).
     :param prior: Optional[numpy.ndarray], default = None
         Explicitly initialize the optimizer state.
-        If set to None if population characteristics are initialized
-        randomly within the bounds.
+        If set to None if the to be optimized features are
+        initialized randomly within the bounds.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
     :param seed: Optional[int], default = None
-        The seed for random number generation.
-    :param verbose: bool, default = False
-        Enables verbose output during the optimization process.
+        Setting a seed to fix randomness (for reproducibility).
+        Default does not use a seed.
+    :param verbose: Union[bool, int], default = False
+         If set to True, enables the output of progress status
+         during the optimization process.
 
     Methods:
     --------
@@ -199,11 +200,11 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
             # General and Decoder
             dims: Tuple[int, ...],
-            estimator: Union[BaseEstimator, Pipeline],
-            estimator_params: Optional[Dict[str, Any]] = None,
+            estimator: Union[Any, Pipeline],
+            estimator_params: Optional[Dict[str, any]] = None,
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
-            groups: numpy.ndarray = None,
+            groups: Optional[numpy.ndarray] = None,
 
             # Particle Swarm Optimization Settings
             method: str = 'global',
@@ -224,14 +225,14 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
             # Training Settings
             tol: float = 1e-5,
-            patience: int = int(1e5),
+            patience: int = 1e5,
             bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
 
             # Misc
             n_jobs: int = 1,
             seed: Optional[int] = None,
-            verbose: bool = False
+            verbose: Union[bool, int] = False
     ) -> None:
 
         super().__init__(

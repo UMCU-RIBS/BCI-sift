@@ -8,23 +8,23 @@
 # -------------------------------------------------------------
 
 from copy import copy
-from typing import Tuple, List, Union, Dict, Any, Optional, Type
+from operator import attrgetter
+from typing import Tuple, Union, Dict, Any, Optional, Type
 
 import numpy
 import numpy as np
 import pandas as pd
+from sklearn.base import BaseEstimator
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import BaseCrossValidator
-from sklearn.model_selection import cross_val_score, cross_validate, train_test_split
+from sklearn.model_selection import cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
 from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
-from operator import attrgetter
-from mpl_toolkits.axes_grid1 import make_axes_locatable
 from tqdm import tqdm
-from sklearn.base import BaseEstimator
 
-from ._Base_Optimizer import BaseOptimizer
+from .Base_Optimizer import BaseOptimizer
+
 
 class RecursiveFeatureElimination(BaseOptimizer):
     """
@@ -102,7 +102,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
             groups: numpy.ndarray = None,
 
             # Recursive Feature Elimination Settings
-            
+
             feature_retention_ratio: Union[str, float] = "auto",
             step: int = 1,
             importance_getter: str = "named_steps.svc.coef_",
@@ -174,8 +174,6 @@ class RecursiveFeatureElimination(BaseOptimizer):
             or -inf if no features are selected.
         """
         X_sub = self.X_[:, mask].reshape(self.X_.shape[0], -1)
-
-
 
         scores = self._evaluate_candidates(X_sub)
         self._save_statistics(copy(mask).reshape(self.grid.shape), scores)
@@ -270,10 +268,10 @@ class RecursiveFeatureElimination(BaseOptimizer):
         best_mask = None
 
         n_features = np.sum(mask)
-        if self.feature_retention_ratio =="auto":
+        if self.feature_retention_ratio == "auto":
             self.n_target_features = 1
-        else: 
-            self.n_target_features = int(self.feature_retention_ratio*n_features)
+        else:
+            self.n_target_features = int(self.feature_retention_ratio * n_features)
         support_ = np.ones(shape=np.sum(mask), dtype=bool)
         pbar = range(int((np.sum(mask) - self.n_target_features) / self.step + 1))
         if self.verbose:

@@ -8,6 +8,7 @@
 # -------------------------------------------------------------
 
 import os
+import warnings
 from copy import copy
 from typing import List, Tuple, Optional
 
@@ -272,6 +273,10 @@ def importance_plot(
     # Check whether a spatial algorithm was used?
     spatial = all([method in ['SpatialExhaustiveSearch', 'SpatialStochasticHillClimbing']
                    for method in set(result_grid['Method'].values)])
+    if viz == 'grid_overlay' and not spatial:
+        warnings.warn(f'Grid overlay visualization only allowed for spatial algorithms', UserWarning)
+        return None
+
     for row_idx, row in enumerate(grid):
         for col_idx, channel_id in enumerate(row):
             ax = plt.subplot2grid((grid.shape[0], grid.shape[1]), (row_idx, col_idx), fig=fig)
@@ -280,7 +285,7 @@ def importance_plot(
                     Rectangle((0, 0), 1, 1, fill=True, facecolor='white', linewidth=0)
                 )
             elif viz == 'grid_overlay' and not spatial:
-                if channel_id in grid[result_grid['Mask'] == max(result_grid['Mean (Score)'])]:
+                if channel_id in grid[result_grid['Mask'].ravel() == max(result_grid['Mean (Score)'])]:
                     ax.add_patch(
                         Rectangle((0, 0), 1, 1, fill=False, edgecolor='navy',
                                   hatch='/', linewidth=1, alpha=0.7)

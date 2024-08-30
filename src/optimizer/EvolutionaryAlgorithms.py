@@ -7,19 +7,17 @@
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
 
-
 import random
-from typing import Tuple, List, Union, Dict, Any, Optional, Callable
+from typing import Tuple, List, Union, Dict, Any, Optional, Callable, Type
 
 import numpy
 import numpy as np
 from deap import base, creator, tools, algorithms
-from sklearn.base import BaseEstimator
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 from tqdm import tqdm
 
-from ._Base_Optimizer import BaseOptimizer
+from .Base_Optimizer import BaseOptimizer
 
 
 class EvolutionaryAlgorithms(BaseOptimizer):
@@ -40,18 +38,17 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
-    :param estimator: Union[BaseEstimator, Pipeline]
+    :param estimator: Union[Any, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Optional[Dict[str, any]], default = None
          Optional parameters to adjust the estimator parameters.
     :param metric: str, default = 'f1_weighted'
-        The performance metric to optimize. Must be a
-        valid scikit-learn scorer string.
+        The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
         If an integer is passed, train_test_split() for 1 and
         StratifiedKFold() is used for >1 as default.
-    :param groups: numpy.ndarray, default = None
+    :param groups: Optional[numpy.ndarray], default = None
         Groups for LeaveOneGroupOut-crossvalidator
     :param population_size: int, default = 120
         The size of the population in each generation.
@@ -109,25 +106,28 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         The tournament size for tournament selection method.
     sel_nd: str, default = 'standard'
         The non-dominated sorting type for NSGA-II selection.
+    :param patience: int, default = 1e5
+        The number of iterations for which the objective function
+        improvement must be below tol to stop optimization.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value
-        is below this for `patientce` iterations, the optimization will stop early.
-    :param patience: int, default = int(1e5)
-        The number of iterations for which the objective function
-        improvement must be below `tol` to stop optimization.
-    :param bounds: Tuple[float, float]], default = (0.0, 1.0)
-        Bounds for the EA parameters to optimze. Since it is a binary
-        selection task, bounds are set to (0.0, 1.0)
+        is below this for 'patience' iterations, the optimization will stop early.
+    :param bounds: Tuple[float, float], default = (0.0, 1.0)
+        Bounds for the algorithm's parameters to optimize. Since
+        it is a binary selection task, bounds are set to (0.0, 1.0).
     :param prior: Optional[numpy.ndarray], default = None
         Explicitly initialize the optimizer state.
-        If set to None if population characteristics are initialized
-        randomly within the bounds.
+        If set to None if the to be optimized features are
+        initialized randomly within the bounds.
+    :param callback: Optional[Union[Callable, Type]], default = None, #TODO add description and callback design
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
     :param seed: Optional[int], default = None
-        Random seed for reproducibility of the evolutionary process.
-    :param verbose: bool, default = False
-        Enables detailed progress messages during the optimization process.
+        Setting a seed to fix randomness (for reproducibility).
+        Default does not use a seed.
+    :param verbose: Union[bool, int], default = False
+         If set to True, enables the output of progress status
+         during the optimization process.
 
     Methods:
     --------
@@ -206,11 +206,11 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
             # General and Decoder
             dims: Tuple[int, ...],
-            estimator: Union[BaseEstimator, Pipeline],
-            estimator_params: Optional[Dict[str, Any]] = None,
+            estimator: Union[Any, Pipeline],
+            estimator_params: Optional[Dict[str, any]] = None,
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
-            groups: numpy.ndarray = None,
+            groups: Optional[numpy.ndarray] = None,
 
             # Genetic Algorithm Settings
             population_size: int = 120,
@@ -241,18 +241,20 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
             # Training Settings
             tol: float = 1e-5,
-            patience: int = int(1e5),
+            patience: int = 1e5,
             bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
+            callback: Optional[Union[Callable, Type]] = None,
 
             # Misc
             n_jobs: int = 1,
             seed: Optional[int] = None,
-            verbose: bool = False
+            verbose: Union[bool, int] = False
     ) -> None:
 
         super().__init__(
-            dims, estimator, estimator_params, metric, cv, groups, bounds, prior, n_jobs, seed, verbose
+            dims, estimator, estimator_params, metric, cv, groups, tol,
+            patience, bounds, prior, callback, n_jobs, seed, verbose
         )
 
         # Genetic Algorithm Settings
@@ -309,30 +311,24 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         stats.register("max", np.max)
 
         hof = tools.HallOfFame(1)
-        best_score = 0.0
-        wait = 0
+        best_score, wait = 0.0, 0
 
-        # Initialize populations
-        populations = [toolbox.population(n=self.population_size - len(self.prior_)) for _ in range(self.islands)]
-        for pop in populations:
-            pop.extend(self.prior_)
-
-        # Set up tqdm progress bar
-        progress_bar = tqdm(range(self.n_gen), desc=self.__class__.__name__, disable=not self.verbose, leave=True)
+        populations = self._initialize_population(toolbox)
+        progress_bar = tqdm(range(self.n_gen), desc=self.__class__.__name__, post_fix=f'{best_score:.6f}',
+                            disable=not self.verbose, leave=True)
 
         # Evolution process with or without migration
-        for gen in progress_bar:
+        for _ in progress_bar:
             for i, island in enumerate(populations):
                 # Optimize Feature Selection
                 populations[i], _ = method(populations[i], toolbox, ngen=1, stats=stats, halloffame=hof, verbose=False,
                                            **method_params)
 
             # Perform migration if applicable
-            if self.islands > 1 and self.migration_chance >= random.random() and gen > 0:
+            if self.islands > 1 and self.migration_chance >= random.random():
                 populations = self._migrate(populations, self.migration_size, topology='ring')
 
-            # Update progress bar with the current best score
-            progress_bar.set_postfix(best_score=hof.items[0].fitness.values[0])
+            progress_bar.set_postfix(best_score=f'{hof.items[0].fitness.values[0]:.6f}')
 
             # Early stopping criteria
             stop, wait = self._early_stopping(hof, best_score, wait)
@@ -340,12 +336,36 @@ class EvolutionaryAlgorithms(BaseOptimizer):
                 break
 
         best_solution = np.array(hof.items[0]).reshape(-1)
-        best_state = self._mask_to_input_dims(np.array(hof.items[0]).reshape(self.dim_size_).astype(bool))
+        best_state = self._prepare_mask(np.array(hof.items[0]).reshape(self.dim_size_) > 0.5)
         best_score = hof.items[0].fitness.values[0] * 100
         return best_solution, best_state, best_score
 
+    def _initialize_population(
+            self, toolbox: base.Toolbox
+    ) -> List[List[Any]]:
+        """
+        Initialize populations for each island with prior individuals.
+
+        Parameters:
+        -----------
+        :param toolbox: base.Toolbox
+            The toolbox object that describes the specified
+            evolutionary process.
+
+
+        Returns:
+        --------
+        :return: List[List[Any]]
+            A population of several individuals.
+        """
+        populations = [toolbox.population(n=self.population_size - len(self.prior_))
+                       for _ in range(self.islands)]
+        for pop in populations:
+            pop.extend(self.prior_)
+        return populations
+
     def _early_stopping(
-            self, hof: tools.HallOfFame, best_score: float, wait: int
+            self, hof: tools.HallOfFame, current_score: float, wait: int
     ) -> Tuple[bool, int]:
         """
         Determines if early stopping should occur based
@@ -357,7 +377,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             The Hall of Fame to keep track of the best individuals.
         :param gen: int
             The current generation number.
-        :param best_score : float
+        :param current_score : float
             The current best score.
         :param wait: int
             The current count of generations without improvement.
@@ -368,37 +388,10 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             A bool indicating whether early stopping should occur (True/False)
             and the updated wait count.
         """
-        # TODO fix the return
-        current_score = hof.items[0].fitness.values[0]
-        if abs(best_score - current_score) > self.tol:
-            wait = 0
-        else:
-            wait += 1
-        if wait > self.patience or current_score >= 1:
-            return True, wait
-        return False, wait
-
-    def _objective_function_wrapper(
-            self, mask: numpy.ndarray
-    ) -> List[float]:
-        """
-        Wraps the objective function to adapt it for
-        compatibility with the genetic algorithm framework.
-
-        Parameters:
-        -----------
-        :params mask: numpy.ndarray
-            A boolean array indicating which features are included
-            in the subset.
-
-        Returns:
-        --------
-        :return List[float]
-            A list containing the objective function's score for
-            the provided mask. Must have the same size as weights
-            of the fitness function (e.g. size of one).
-        """
-        return [self._objective_function(mask)]
+        best_score = hof.items[0].fitness.values[0]
+        stop = best_score < current_score and abs(best_score - current_score) > self.tol
+        wait = 0 if stop else wait + 1
+        return wait > self.patience or current_score >= 1, wait
 
     def _migrate(
             self, islands: List[List[Any]], k: int, topology: str = 'ring'
@@ -422,14 +415,11 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             A list of populations (islands).
         """
         if topology == 'ring':
+            # Select k individuals from island i to migrate to island (i+1) % num_islands
             for i in range(self.islands):
-                # Select k individuals from island i to migrate to island (i+1) % num_islands
-                emigrants = tools.selBest(islands[i], k)
-                islands[(i + 1) % self.islands].extend(emigrants)  # Send emigrants to next island
-
-                # Remove emigrants from original population
-                for emigrant in emigrants:
-                    islands[i].remove(emigrant)
+                emigrants = tools.selBest(islands[i], self.migration_size)
+                islands[(i + 1) % self.islands].extend(emigrants)
+                islands[i] = [ind for ind in islands[i] if ind not in emigrants]
         return islands
 
     def _handle_bounds(
@@ -445,8 +435,6 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             A tuple of two numpy arrays representing the lower and upper bounds.
         """
         return self.bounds
-        #     np.zeros(np.prod(self.dim_size_)), np.ones(np.prod(self.dim_size_))
-        # )
 
     def _handle_prior(
             self
@@ -460,7 +448,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         Returns:
         --------
         :returns: Optional[List[Any]]:
-            A list of DEAP `Individual` objects generated from the
+            A list of DEAP Individual objects generated from the
             prior mask. If no prior is provided, an empty list is returned.
         """
         prior = []
@@ -490,7 +478,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             of its parameters.
         """
 
-        method_map = {
+        return {
             'simple': (
                 algorithms.eaSimple,
                 {'cxpb': self.cxpb, 'mutpb': self.mutpb}),
@@ -505,8 +493,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             'generate_update': (
                 algorithms.eaGenerateUpdate,
                 {})
-        }
-        return method_map[self.method]
+        }[self.method]
 
     def _init_crossover(
             self,
@@ -521,7 +508,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             of its parameters.
         """
 
-        crossover_map = {
+        return {
             'one_point': (tools.cxOnePoint, {}),
             'two_point': (tools.cxTwoPoint, {}),
             'uniform': (tools.cxUniform, {'indpb': self.cx_indpb}),
@@ -532,8 +519,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             'es_two_point': (tools.cxESTwoPoint, {'alpha': self.cx_alpha}),
             'sim_binary': (tools.cxSimulatedBinary, {'eta': self.cx_eta}),
             'messy_one_point': (tools.cxMessyOnePoint, {})
-        }
-        return crossover_map[self.crossover]
+        }[self.crossover]
 
     def _init_mutation(
             self,
@@ -547,14 +533,13 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             A tuple containing the mutation function and a dictionary
             of its parameters.
         """
-        mutation_map = {
+        return {
             'gaussian': (tools.mutGaussian,
                          {'mu': self.mut_mu, 'sigma': self.mut_sigma, 'indpb': self.mut_indpb}),
             'shuffle': (tools.mutShuffleIndexes, {'indpb': self.mut_indpb}),
             'flip': (tools.mutFlipBit, {'indpb': self.mut_indpb}),
             'es_log_normal': (tools.mutESLogNormal, {'c': self.mut_c, 'indpb': self.mut_indpb})
-        }
-        return mutation_map[self.mutate]
+        }[self.mutate]
 
     def _init_selection(
             self,
@@ -568,7 +553,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             A tuple containing the selection function and a dictionary
             of its parameters.
         """
-        selection_map = {
+        return {
             'tournament': (tools.selTournament, {'tournsize': self.sel_tournsize}),
             'roulette': (tools.selRoulette, {}),
             'nsga2': (tools.selNSGA2, {'nd': self.sel_nd}),
@@ -579,8 +564,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             'lexicase': (tools.selLexicase, {}),
             'epsilon_lexicase': (tools.selEpsilonLexicase, {}),
             'auto_epsilon_lexicase': (tools.selAutomaticEpsilonLexicase, {})
-        }
-        return selection_map[self.selection]
+        }[self.selection]
 
     def _init_toolbox(self) -> base.Toolbox:
         """
@@ -608,7 +592,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
         # Step 3: Register the evaluation, crossover, mutation, and selection functions
-        toolbox.register("evaluate", self._objective_function_wrapper)
+        toolbox.register("evaluate", lambda x: [self._objective_function(x)])
         crossover, crossover_params = self._init_crossover()
         toolbox.register("mate", crossover, **crossover_params)
         mutation, mutation_params = self._init_mutation()
@@ -622,6 +606,11 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             np.clip(array, self.bounds_[0], self.bounds_[1], out=array)
             individual[:] = array.tolist()
             return individual
+
+        # def clip_individual(individual):
+        #     """Clip the individual's values within the specified bounds."""
+        #     np.clip(individual, self.bounds_[0], self.bounds_[1], out=individual)
+        #     return individual
 
         # Decorate the mate and mutate functions with clipping
         toolbox.decorate("mate", lambda func: lambda ind1, ind2, **kwargs: (

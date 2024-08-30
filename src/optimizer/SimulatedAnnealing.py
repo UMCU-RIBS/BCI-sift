@@ -7,17 +7,24 @@
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
 
-from typing import Tuple, List, Union, Dict, Any, Optional
+from typing import Tuple, List, Union, Dict, Any, Optional, Type, Callable
 
 import numpy
 import numpy as np
+from scipy._lib._util import check_random_state
+from scipy.optimize import Bounds
+from scipy.optimize import OptimizeResult
 from scipy.optimize import dual_annealing
-from sklearn.base import BaseEstimator
+from scipy.optimize._constraints import new_bounds_to_old
+from scipy.optimize._dual_annealing import ObjectiveFunWrapper, LocalSearchWrapper, EnergyState, VisitingDistribution, \
+    StrategyChain
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
+from tqdm import tqdm
 
-from src.optimizer.backend._backend import SimulatedAnnealingReporter
-from ._Base_Optimizer import BaseOptimizer
+from .Base_Optimizer import BaseOptimizer
+
+__all__ = ['dual_annealing']
 
 
 class SimulatedAnnealing(BaseOptimizer):
@@ -77,20 +84,29 @@ class SimulatedAnnealing(BaseOptimizer):
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
-    :param estimator: Union[BaseEstimator, Pipeline]
-        The machine learning estimator to evaluate channel combinations.
+    :param estimator: Union[Any, Pipeline]
+        The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Optional[Dict[str, any]], default = None
          Optional parameters to adjust the estimator parameters.
     :param metric: str, default = 'f1_weighted'
-        The metric name to optimize, must be compatible with scikit-learn.
+        The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
         If an integer is passed, train_test_split() for 1 and
         StratifiedKFold() is used for >1 as default.
-    :param groups: numpy.ndarray, default = None
+    :param groups: Optional[numpy.ndarray], default = None
         Groups for LeaveOneGroupOut-crossvalidator
     :param n_iter: int, default = 1000
         The number of iterations for the simulated annealing process.
+    :param optimizer_method: str, default = 'L-BFGS-B'
+        The tye of optimization method used. Valid options are:
+        'Nelder-Mead', 'Powell’, 'CG', 'BFGS', 'Newton-CG', 'L-BFGS-B',
+        'TNC', 'COBYLA', 'COBYQA', 'SLSQP', 'trust-constr’', 'dogleg',
+        'trust-ncg', 'trust-exact', 'trust-krylov'.
+    :param local_search: bool, default = True
+        If `local_search` is set to False, a traditional Generalized
+        Simulated Annealing will be performed with no local search
+        strategy applied.
     :param initial_temp: float, default = 5230.0
         The initial temperature for the annealing process.
     :param restart_temp_ratio: float, default = 2.e-5
@@ -101,24 +117,39 @@ class SimulatedAnnealing(BaseOptimizer):
         The acceptance parameter for the annealing process.
     :param maxfun: float, default = 1e7
         The maximum function evaluations.
+    :param patience: int, default = 1e5
+        The number of iterations for which the objective function
+        improvement must be below tol to stop optimization.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value
-        is below this for `patience` iterations, the optimization will stop early.
-    :param bounds: Tuple[float, float]], default = (0.0, 1.0)
-        Bounds for the SA parameters to optimize. Since it is a binary
-        selection task, bounds are set to (0.0, 1.0)
+        is below this for 'patience' iterations, the optimization will stop early.
+    :param bounds: Tuple[float, float], default = (0.0, 1.0)
+        Bounds for the algorithm's parameters to optimize. Since
+        it is a binary selection task, bounds are set to (0.0, 1.0).
     :param prior: Optional[numpy.ndarray], default = None
         Explicitly initialize the optimizer state.
-        If set to None if population characteristics are initialized
-        randomly within the bounds.
+        If set to None if the to be optimized features are
+        initialized randomly within the bounds.
+    :param callback: Optional[Union[Callable, Type]], default = None
+        A callback function with signature ``callback(x, f, context)``,
+        which will be called for all minima found.
+        ``x`` and ``f`` are the coordinates and function value of the
+        latest minimum found, and ``context`` has value in [0, 1, 2], with the
+        following meaning:
+
+            - 0: minimum detected in the annealing process.
+            - 1: detection occurred in the local search process.
+            - 2: detection done in the dual annealing process.
+
+        If the callback implementation returns True, the algorithm will stop.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
     :param seed: Optional[int], default = None
-        The random seed for initializing the random number generator.
-    :param verbose: bool, default = False
-        Enables verbose output during the optimization process.
-    :param **kwargs: Dict[str, any]
-        Optional parameters to adjust the estimator parameters.
+        Setting a seed to fix randomness (for reproducibility).
+        Default does not use a seed.
+    :param verbose: Union[bool, int], default = False
+         If set to True, enables the output of progress status
+         during the optimization process.
 
     Methods:
     --------
@@ -197,14 +228,16 @@ class SimulatedAnnealing(BaseOptimizer):
 
             # General and Decoder
             dims: Tuple[int, ...],
-            estimator: Union[BaseEstimator, Pipeline],
-            estimator_params: Optional[Dict[str, Any]] = None,
+            estimator: Union[Any, Pipeline],
+            estimator_params: Optional[Dict[str, any]] = None,
             metric: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
-            groups: numpy.ndarray = None,
+            groups: Optional[numpy.ndarray] = None,
 
             # Simulated Annealing Settings
             n_iter: int = 1000,
+            optimizer_method: str = 'L-BFGS-B',
+            local_search: bool = True,
             initial_temp: float = 5230.0,
             restart_temp_ratio: float = 2.e-5,
             visit: float = 2.62,
@@ -213,23 +246,26 @@ class SimulatedAnnealing(BaseOptimizer):
 
             # Training Settings
             tol: float = 1e-5,
-            # patience: int = int(1e5),
+            patience: int = 1e5,
             bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
+            callback: Optional[Union[Callable, Type]] = None,
 
             # Misc
             n_jobs: int = 1,
             seed: Optional[int] = None,
-            verbose: bool = False
+            verbose: Union[bool, int] = False
     ) -> None:
 
         super().__init__(
-            dims, estimator, estimator_params, metric, cv, groups, bounds, prior, n_jobs, seed, verbose
+            dims, estimator, estimator_params, metric, cv, groups, tol,
+            patience, bounds, prior, callback, n_jobs, seed, verbose
         )
 
         # Simulated Annealing Settings
-        self.bounds = bounds
         self.n_iter = n_iter
+        self.optimizer_method = optimizer_method
+        self.local_search = local_search
         self.initial_temp = initial_temp
         self.restart_temp_ratio = restart_temp_ratio
         self.visit = visit
@@ -238,7 +274,8 @@ class SimulatedAnnealing(BaseOptimizer):
 
         # Training Settings
         self.tol = tol
-        # self.patience = patience
+        self.patience = patience
+        self.callback = callback
 
     def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
@@ -249,20 +286,122 @@ class SimulatedAnnealing(BaseOptimizer):
         Tuple[numpy.ndarray, numpy.ndarray, float]
             The best solution and state found and their corresponding fitness score.
         """
-        callback = SimulatedAnnealingReporter(verbose=self.verbose)
+        if isinstance(self.bounds_, Bounds):
+            self.bounds_ = new_bounds_to_old(self.bounds_.lb, self.bounds_.ub, len(self.bounds_.lb))
 
-        method_args = {
-            'bounds': self.bounds_, 'maxiter': self.n_iter, 'minimizer_kwargs': {'tol': self.tol},
-            'initial_temp': self.initial_temp, 'restart_temp_ratio': self.restart_temp_ratio,
-            'visit': self.visit, 'accept': self.accept, 'maxfun': self.maxfun, 'seed': self.seed,
-            'callback': callback, 'x0': self.prior_
-        }
+        # noqa: E501
+        if self.prior_ is not None and not len(self.prior_) == len(self.bounds_):
+            raise ValueError('Bounds size does not match x0')
 
-        result = dual_annealing(lambda x: -self._objective_function(x), **method_args)
+        lu = list(zip(*self.bounds_))
+        lower = np.array(lu[0])
+        upper = np.array(lu[1])
+        # Check that restart temperature ratio is correct
+        if self.restart_temp_ratio <= 0. or self.restart_temp_ratio >= 1.:
+            raise ValueError('Restart temperature ratio has to be in range (0, 1)')
+        # Checking bounds are valid
+        if (np.any(np.isinf(lower)) or np.any(np.isinf(upper)) or np.any(
+                np.isnan(lower)) or np.any(np.isnan(upper))):
+            raise ValueError('Some bounds values are inf values or nan values')
+        # Checking that bounds are consistent
+        if not np.all(lower < upper):
+            raise ValueError('Bounds are not consistent min < max')
+        # Checking that bounds are the same length
+        if not len(lower) == len(upper):
+            raise ValueError('Bounds do not have the same dimensions')
 
-        best_state = (result.x > 0.5).reshape(self.dim_size_)  # self.grid.shape)
-        best_score = -result.fun * 100
-        return result.x, best_state, best_score
+        minimizer_kwargs = {'method': self.optimizer_method}
+
+        # Wrapper for the objective function
+        func_wrapper = ObjectiveFunWrapper(lambda x: -self._objective_function(x), self.maxfun)
+
+        minimizer_wrapper = LocalSearchWrapper(
+            self.bounds_, func_wrapper, **minimizer_kwargs)
+
+        # Initialization of random Generator for reproducible runs if seed provided
+        rand_state = check_random_state(self.seed)
+        # Initialization of the energy state
+        energy_state = EnergyState(lower, upper)
+        energy_state.reset(func_wrapper, rand_state, self.prior_)
+        # Minimum value of annealing temperature reached to perform
+        # re-annealing
+        temperature_restart = self.initial_temp * self.restart_temp_ratio
+        # VisitingDistribution instance
+        visit_dist = VisitingDistribution(lower, upper, self.visit, rand_state)
+        # Strategy chain instance
+        strategy_chain = StrategyChain(self.accept, visit_dist, func_wrapper,
+                                       minimizer_wrapper, rand_state, energy_state)
+        need_to_stop = False
+        iteration = 0
+        best_score = 0.
+        wait = 0
+        message = []
+        # OptimizeResult object to be returned
+        optimize_res = OptimizeResult()
+        optimize_res.success = True
+        optimize_res.status = 0
+
+        t1 = np.exp((self.visit - 1) * np.log(2.0)) - 1.0
+        # Run the search loop
+        while not need_to_stop:
+            progress_bar = tqdm(range(self.n_iter), desc=self.__class__.__name__, postfix=f'{best_score:.6f}',
+                                disable=not self.verbose, leave=True)
+            for i in progress_bar:
+                # Compute temperature for this step
+                s = float(i) + 2.0
+                t2 = np.exp((self.visit - 1) * np.log(s)) - 1.0
+                temperature = self.initial_temp * t1 / t2
+                # Update logs and early stopping
+                score = energy_state.ebest
+                if best_score > score:
+                    best_score = score
+                    progress_bar.set_postfix(best_score=f'{best_score:.6f}')
+                    if abs(best_score - score) > self.tol:
+                        wait = 0
+                if wait > self.patience or score <= -1.0:
+                    progress_bar.write(f"\nMaximum score reached")
+                    message.append("Maximum score reached")
+                    need_to_stop = True
+                    break
+                if iteration >= self.n_iter:
+                    message.append("Maximum number of iteration reached")
+                    need_to_stop = True
+                    break
+                # Need a re-annealing process?
+                if temperature < temperature_restart:
+                    energy_state.reset(func_wrapper, rand_state)
+                    break
+                # starting strategy chain
+                val = strategy_chain.run(i, temperature)
+                if val is not None:
+                    message.append(val)
+                    need_to_stop = True
+                    optimize_res.success = False
+                    break
+                # Possible local search at the end of the strategy chain
+                if self.local_search:
+                    val = strategy_chain.local_search()
+                    if val is not None:
+                        message.append(val)
+                        need_to_stop = True
+                        optimize_res.success = False
+                        break
+                iteration += 1
+                wait += 1
+
+        # Setting the OptimizeResult values
+        optimize_res.x = energy_state.xbest
+        optimize_res.fun = energy_state.ebest
+        optimize_res.nit = iteration
+        optimize_res.nfev = func_wrapper.nfev
+        optimize_res.njev = func_wrapper.ngev
+        optimize_res.nhev = func_wrapper.nhev
+        optimize_res.message = message
+
+        best_solution = optimize_res.x
+        best_state = self._prepare_mask((optimize_res.x > 0.5).reshape(self.dim_size_))
+        best_score = -optimize_res.fun * 100
+        return best_solution, best_state, best_score
 
     def _handle_bounds(
             self

@@ -10,7 +10,7 @@
 import random
 import warnings
 from copy import copy
-from typing import Tuple, Union, Dict, Any, Optional, Type
+from typing import Tuple, Union, Dict, Any, Optional, Type, Callable
 
 import matplotlib
 import numpy
@@ -57,6 +57,12 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         StratifiedKFold() is used for >1 as default.
     :param groups: Optional[numpy.ndarray], default = None
         Groups for LeaveOneGroupOut-crossvalidator
+    :param patience: int, default = 1e5
+        The number of iterations for which the objective function
+        improvement must be below tol to stop optimization.
+    :param tol: float, default = 1e-5
+        The function tolerance; if the change in the best objective value
+        is below this for 'patience' iterations, the optimization will stop early.
     :param bounds: Tuple[float, float], default = (0.0, 1.0)
         Bounds for the algorithm's parameters to optimize. Since
         it is a binary selection task, bounds are set to (0.0, 1.0).
@@ -64,6 +70,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         Explicitly initialize the optimizer state.
         If set to None if the to be optimized features are
         initialized randomly within the bounds.
+    :param callback: Optional[Union[Callable, Type]], default = None, #TODO add description and callback design
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
     :param seed: Optional[int], default = None
@@ -118,8 +125,11 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             groups: Optional[numpy.ndarray] = None,
 
             # Training Settings
+            tol: float = 1e-5,
+            patience: int = 1e5,
             bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
+            callback: Optional[Union[Callable, Type]] = None,
 
             # Misc
             n_jobs: int = 1,
@@ -136,8 +146,11 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         self.groups = groups
 
         # Training Settings
+        self.tol = tol
+        self.patience = patience
         self.bounds = bounds
         self.prior = prior
+        self.callback_ = callback
 
         # Misc
         self.n_jobs = n_jobs

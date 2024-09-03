@@ -6,8 +6,9 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-
+import multiprocessing as mp
 import random
+from numbers import Integral, Real
 from typing import Tuple, List, Union, Dict, Any, Optional, Callable, Type
 
 import numpy
@@ -15,6 +16,7 @@ import numpy as np
 from deap import base, creator, tools, algorithms
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
+from sklearn.utils._param_validation import Interval, StrOptions
 from tqdm import tqdm
 
 from .Base_Optimizer import BaseOptimizer
@@ -42,7 +44,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Optional[Dict[str, any]], default = None
          Optional parameters to adjust the estimator parameters.
-    :param metric: str, default = 'f1_weighted'
+    :param scoring: str, default = 'f1_weighted'
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
@@ -59,16 +61,20 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         parallel evolutionary processes.
     :param method: str, default = 'simple'
         The evolutionary algorithm to use. Options include 'simple',
-        'mu_plus_lambda', 'mu_lambda', 'generate_update'.
+        'mu_plus_lambda' and 'mu_lambda'.
     :param crossover: str, default = 'two_point'
         The method used for crossing over individuals in the population.
-        Options include 'one_point', 'two_point', 'uniform', etc.
+        Valid option are 'one_point', 'two_point','uniform','part_matched',
+        'uni_part_matched', 'ordered', 'blend', 'es_two_point' and 'sim_binary',
+        'messy_one_point'.
     :param mutate: str, default = 'flip'
         The mutation method applied to offspring.
-        Options include 'gaussian', 'shuffle', 'flip', etc.
+        Valid options include 'gaussian', 'shuffle', 'flip' and 'es_log_normal'.
     :param selection: str, default = 'tournament'
         The method used to select individuals for the next generation.
-         Options include 'tournament', 'roulette', 'nsga2', etc.
+        Options include 'tournament', 'roulette','nsga2','spea2', 'best',
+        'tournament_dcd','stochastic_uni','lexicase','epsilon_lexicase' and
+        'auto_epsilon_lexicase'.
     :param mu: int, default = 30
         The number of individuals to select for the next generation
         in 'mu_plus_lambda' and 'mu_lambda' methods.
@@ -100,12 +106,13 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         The independent probability of each attribute being mutated.
     :param mut_c: float, default = 0.01
         The c value for ES log-normal mutation.
-    mut_eta: float, default = 40
+    :param mut_eta: float, default = 40
         The eta value for polynomial mutation.
-    sel_tournsize: int, default = 3
+    :param sel_tournsize: int, default = 3
         The tournament size for tournament selection method.
-    sel_nd: str, default = 'standard'
+    :param sel_nd: str, default = 'standard'
         The non-dominated sorting type for NSGA-II selection.
+        Valid ovptions are 'standard' and 'log.
     :param patience: int, default = 1e5
         The number of iterations for which the objective function
         improvement must be below tol to stop optimization.
@@ -119,10 +126,14 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         Explicitly initialize the optimizer state.
         If set to None if the to be optimized features are
         initialized randomly within the bounds.
-    :param callback: Optional[Union[Callable, Type]], default = None, #TODO add description and callback design
+    :param callback: Callable, optional
+        A callback function of the structure :code: `callback(x, f, context)`,
+        which will be called at each iteration. :code: `x` and :code: `f`
+        are the solution and function value, and :code: `context` contains
+        the diagnostics of the current iteration.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
-    :param seed: Optional[int], default = None
+    :param random_state: Optional[int], default = None
         Setting a seed to fix randomness (for reproducibility).
         Default does not use a seed.
     :param verbose: Union[bool, int], default = False
@@ -138,16 +149,6 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     - run:
         Executes the evolutionary optimization process, managing both single
         and multi-island configurations.
-    - evaluate_candidates:
-        Evaluates the selected features using cross-validation or train-test split.
-    - objective_function:
-        Calculates the score to maximize or minimize based on the provided mask.
-    - elimination_plot:
-        Generates and saves a plot visualizing the maximum and all scores across different subgrid sizes.
-    - importance_plot:
-        Generates and saves a heatmap visualizing the importance of each channel within the grid.
-    - objective_function_wrapper:
-        A wrapper for the objective function to adapt it to the optimization process.
     - migrate:
         Migrates individuals between islands based on the specified topology.
 
@@ -156,7 +157,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     This implementation is semi-compatible with the scikit-learn framework,
     which builds around two-dimensional feature matrices. To use this
     transfortmation within a scikit-learn Pipeline, the four dimensional data
-    must eb flattened after the first dimension [samples, features]. For example,
+    must be flattened after the first dimension [samples, features]. For example,
     scikit-learn's FunctionTransformer can achieve this.
 
     Care must be taken when the lambda:mu ratio is 1 to 1 for the MuPlusLambda and
@@ -177,29 +178,61 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     The following example shows how to retrieve a feature mask for
     a synthetic data set.
 
-    # >>> import numpy as np
-    # >>> from sklearn.svm import SVC
-    # >>> from sklearn.pipeline import Pipeline
-    # >>> from sklearn.preprocessing import MinMaxScaler
-    # >>> from sklearn.datasets import make_classification
-    # >>> from FingersVsGestures.src.channel_elimination import EvolutionaryAlgorithms # TODO adjust
-    # >>> X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
-    # >>> X = X.reshape((100, 8, 4, 100))
-    # >>> grid = np.arange(1, 33).reshape(X.shape[1:3])
-    # >>> estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
+    .. code-block:: python
 
-    # >>> ea = EvolutionaryAlgorithms(grid, estimator)
-    # >>> ea.fit(X, y)
-    # >>> print(ea.mask_)
-    array([[False  True False False], [False False False False], [ True  True False False], [False False False  True],
-           [False False False False], [False False False False], [False False  True False], [False False False False]])
-    # >>> print(ea.score_)
-    26.545670995670996
+        import numpy
+        from sklearn.svm import SVC
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import MinMaxScaler
+        from sklearn.datasets import make_classification
+        from FingersVsGestures.src.channel_elimination import EvolutionaryAlgorithms # TODO adjust
+
+        X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
+        X = X.reshape((100, 8, 4, 100))
+        grid = numpy.arange(1, 33).reshape(X.shape[1:3])
+        estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
+
+        ea = ParticleSwarmOptimization(grid, estimator)
+        ea.fit(X, y)
+        print(ea.score_)
+        26.545670995670996
 
     Returns:
     --------
     :return: None
     """
+    _parameter_constraints: dict = {**BaseOptimizer._parameter_constraints}
+    _parameter_constraints.update(
+        {
+            'population_size': [Interval(Integral, 1, None, closed='left')],
+            'n_gen': [Interval(Integral, 1, None, closed='left')],
+            'islands': [Interval(Integral, 1, None, closed='left')],
+            'method': [StrOptions({'simple', 'mu_plus_lambda', 'mu_lambda'})],
+            'crossover': [StrOptions(
+                {'one_point', 'two_point', 'uniform', 'part_matched', 'uni_part_matched',
+                 'ordered', 'blend', 'es_two_point', 'sim_binary', 'messy_one_point'})],
+            'mutate': [StrOptions({'gaussian', 'shuffle', 'flip', 'es_log_normal'})],
+            'selection': [StrOptions(
+                {'tournament', 'roulette', 'nsga2', 'spea2', 'best', 'tournament_dcd',
+                 'stochastic_uni', 'lexicase', 'epsilon_lexicase', 'auto_epsilon_lexicase'})],
+            'mu': [Interval(Integral, 1, None, closed='left')],
+            'lmbda': [Interval(Integral, 1, None, closed='left')],
+            'migration_chance': [Interval(Real, 0, 1, closed='both')],
+            'migration_size': [Interval(Integral, 1, None, closed='left')],
+            'cxpb': [Interval(Real, 0, 1, closed='both')],
+            'mutpb': [Interval(Real, 0, 1, closed='both')],
+            'cx_indpb': [Interval(Real, 0, 1, closed='both')],
+            'cx_alpha': [Interval(Real, 0, 1, closed='both')],
+            'cx_eta': [Interval(Real, 0, None, closed='left')],
+            'mut_sigma': [Interval(Real, 0, None, closed='left')],
+            'mut_mu': [Real],
+            'mut_indpb': [Interval(Real, 0, 1, closed='both')],
+            'mut_c': [Interval(Real, 0, None, closed='left')],
+            'mut_eta': [Interval(Real, 0, None, closed='left')],
+            'sel_tournsize': [Interval(Integral, 1, None, closed='left')],
+            'sel_nd': [StrOptions({'standard', 'log'})],
+        }
+    )
 
     def __init__(
             self,
@@ -208,7 +241,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             dims: Tuple[int, ...],
             estimator: Union[Any, Pipeline],
             estimator_params: Optional[Dict[str, any]] = None,
-            metric: str = 'f1_weighted',
+            scoring: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: Optional[numpy.ndarray] = None,
 
@@ -241,20 +274,20 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
             # Training Settings
             tol: float = 1e-5,
-            patience: int = 1e5,
+            patience: int = int(1e5),
             bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
             callback: Optional[Union[Callable, Type]] = None,
 
             # Misc
             n_jobs: int = 1,
-            seed: Optional[int] = None,
+            random_state: Optional[int] = None,
             verbose: Union[bool, int] = False
     ) -> None:
 
         super().__init__(
-            dims, estimator, estimator_params, metric, cv, groups, tol,
-            patience, bounds, prior, callback, n_jobs, seed, verbose
+            dims, estimator, estimator_params, scoring, cv, groups, tol,
+            patience, bounds, prior, callback, n_jobs, random_state, verbose
         )
 
         # Genetic Algorithm Settings
@@ -284,10 +317,6 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         self.sel_tournsize = sel_tournsize
         self.sel_nd = sel_nd
 
-        # Training Settings
-        self.tol = tol
-        self.patience = patience
-
     def _run(
             self
     ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
@@ -300,29 +329,30 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         :return Tuple[np.ndarray, numpy.ndarray, float]:
             The best found solution, mask, and their fitness score.
         """
-
-        method, method_params = self._init_method()
+        # Set up EA algorithm
         toolbox = self._init_toolbox()
-
+        populations = self._initialize_population(toolbox)
+        method, method_params = self._init_method()
+        # Initialize history
         stats = tools.Statistics(lambda ind: ind.fitness.values)
         stats.register("avg", np.mean)
         stats.register("std", np.std)
         stats.register("min", np.min)
         stats.register("max", np.max)
 
-        hof = tools.HallOfFame(1)
+        hof = tools.HallOfFame(1, similar=numpy.array_equal)
         best_score, wait = 0.0, 0
 
-        populations = self._initialize_population(toolbox)
-        progress_bar = tqdm(range(self.n_gen), desc=self.__class__.__name__, post_fix=f'{best_score:.6f}',
-                            disable=not self.verbose, leave=True)
-
+        progress_bar = tqdm(
+            range(self.n_gen), desc=self.__class__.__name__, postfix=f'{best_score:.6f}',
+            disable=not self.verbose, leave=True
+        )
         # Evolution process with or without migration
         for _ in progress_bar:
-            for i, island in enumerate(populations):
+            for self.iter_, island in enumerate(populations):
                 # Optimize Feature Selection
-                populations[i], _ = method(populations[i], toolbox, ngen=1, stats=stats, halloffame=hof, verbose=False,
-                                           **method_params)
+                populations[self.iter_], _ = method(populations[self.iter_], toolbox, ngen=1, stats=stats,
+                                                    halloffame=hof, verbose=False, **method_params)
 
             # Perform migration if applicable
             if self.islands > 1 and self.migration_chance >= random.random():
@@ -358,10 +388,13 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         :return: List[List[Any]]
             A population of several individuals.
         """
-        populations = [toolbox.population(n=self.population_size - len(self.prior_))
-                       for _ in range(self.islands)]
-        for pop in populations:
-            pop.extend(self.prior_)
+        # Initialize populations as numpy arrays
+        populations = [toolbox.population(n=self.population_size) for _ in
+                       range(self.islands)]
+        # Extend populations with prior individuals
+        if self.prior_:
+            for i, pop in enumerate(populations):
+                populations[i] = np.vstack((pop, np.array(self.prior_)))
         return populations
 
     def _early_stopping(
@@ -417,10 +450,32 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         if topology == 'ring':
             # Select k individuals from island i to migrate to island (i+1) % num_islands
             for i in range(self.islands):
-                emigrants = tools.selBest(islands[i], self.migration_size)
-                islands[(i + 1) % self.islands].extend(emigrants)
-                islands[i] = [ind for ind in islands[i] if ind not in emigrants]
+                emigrants = np.array(tools.selBest(islands[i], self.migration_size))
+                islands[(i + 1) % self.islands] = np.vstack((islands[(i + 1) % self.islands], emigrants))
+                islands[i] = np.array([ind for ind in islands[i] if ind not in emigrants])
         return islands
+
+    def objective_function_wrapper(
+            self, mask: numpy.ndarray
+    ) -> List[float]:
+        """
+        Wraps the objective function to adapt it for
+        compatibility with the genetic algorithm framework.
+
+        Parameters:
+        -----------
+        :params mask: numpy.ndarray
+            A boolean array indicating which features are included
+            in the subset.
+
+        Returns:
+        --------
+        :return List[float]
+            A list containing the objective function's score for
+            the provided mask. Must have the same size as weights
+            of the fitness function (e.g. size of one).
+        """
+        return [self._objective_function(mask)]
 
     def _handle_bounds(
             self
@@ -461,7 +516,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             prior = creator.Individual(
                 [0.49 - gaus[i] if x < 0.5 else 0.51 + gaus[i]
                  for i, x in enumerate(([self.prior.astype(float)] * int(self.population_size * 0.2)))],
-                self.toolbox_.attr_bool, n=1
+                create_individual, n=1
             )
         return prior
 
@@ -489,10 +544,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             'mu_lambda': (
                 algorithms.eaMuCommaLambda,
                 {'cxpb': self.cxpb, 'mutpb': self.mutpb,
-                 'mu': self.mu, 'lambda_': self.lmbda}),
-            'generate_update': (
-                algorithms.eaGenerateUpdate,
-                {})
+                 'mu': self.mu, 'lambda_': self.lmbda})
         }[self.method]
 
     def _init_crossover(
@@ -580,19 +632,24 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         """
         # Step 1: Create fitness and individual types
         creator.create("FitnessMax", base.Fitness, weights=[1.0])
-        creator.create("Individual", list, fitness=creator.FitnessMax)
+        creator.create("Individual", np.ndarray, fitness=creator.FitnessMax)
 
         # Step 2: Initialize the toolbox
         toolbox = base.Toolbox()
+        if self.n_jobs > 1:
+            pool = mp.Pool()
+            toolbox.register("map", pool.map)
+
+        def create_individual(n):
+            """Create an individual using NumPy array and assign fitness."""
+            return creator.Individual(np.random.uniform(self.bounds_[0], self.bounds_[1], n))
 
         # Step 2: Register the attribute, individual, and population creation functions
-        toolbox.register("attr_bool", np.random.uniform, self.bounds_[0], self.bounds_[1])
-        toolbox.register("individual", tools.initRepeat, creator.Individual,
-                         toolbox.attr_bool, n=np.prod(self.dim_size_))
+        toolbox.register("individual", create_individual, n=np.prod(self.dim_size_))
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
         # Step 3: Register the evaluation, crossover, mutation, and selection functions
-        toolbox.register("evaluate", lambda x: [self._objective_function(x)])
+        toolbox.register("evaluate", self.objective_function_wrapper)
         crossover, crossover_params = self._init_crossover()
         toolbox.register("mate", crossover, **crossover_params)
         mutation, mutation_params = self._init_mutation()
@@ -600,17 +657,17 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         selection, selection_params = self._init_selection()
         toolbox.register("select", selection, **selection_params)
 
-        def clip_individual(individual):
-            """Clip the individual's values within the specified bounds."""
-            array = np.array(individual)
-            np.clip(array, self.bounds_[0], self.bounds_[1], out=array)
-            individual[:] = array.tolist()
-            return individual
-
         # def clip_individual(individual):
         #     """Clip the individual's values within the specified bounds."""
-        #     np.clip(individual, self.bounds_[0], self.bounds_[1], out=individual)
+        #     array = np.array(individual)
+        #     np.clip(array, self.bounds_[0], self.bounds_[1], out=array)
+        #     individual[:] = array.tolist()
         #     return individual
+
+        def clip_individual(individual):
+            """Clip the individual's values within the specified bounds."""
+            np.clip(individual, self.bounds_[0], self.bounds_[1], out=individual)
+            return individual
 
         # Decorate the mate and mutate functions with clipping
         toolbox.decorate("mate", lambda func: lambda ind1, ind2, **kwargs: (

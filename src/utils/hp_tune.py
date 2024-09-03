@@ -11,7 +11,6 @@ import multiprocessing
 import os
 import time
 import warnings
-from copy import copy
 from typing import Dict, Any, Union
 
 import ray
@@ -22,7 +21,6 @@ from ray.tune.search.hebo import HEBOSearch
 from ray.tune.search.skopt import SkOptSearch
 from sklearn.base import BaseEstimator
 from sklearn.exceptions import ConvergenceWarning
-from sklearn.metrics import get_scorer
 from sklearn.pipeline import Pipeline
 
 if False:  # torch.cuda.is_available(): # False: #
@@ -74,97 +72,119 @@ class PerfTimer:
         self.duration = time.perf_counter() - self.start
 
 
-class TrainTransformer(tune.Trainable):
-    """
-    A Ray Tune Trainable class that handles training and evaluation of a model pipeline.
+def train(config: Dict[str, Any], object_store_ref: Dict[str, ray.ObjectRef]):
+    fs_transformer = ray.get(object_store_ref['estimator'])
+    X, y = ray.get(object_store_ref['data'])
 
-    Attributes:
-        fs_transformer (BaseEstimator): The estimator to be trained.
-        X (Any): The input features.
-        y (Any): The target labels.
-        metric (str): The metric used for evaluation.
-        scorer (Callable): The scorer function based on the metric.
-        cv_indices (Iterator): The cross-validation indices.
-        mean (float): The running mean of the performance metric.
-        iter (int): The current iteration count.
-        _estimator_params (Dict[str, Any]): Parameters for the estimator.
-        _global_best_model (BaseEstimator): The best model found during training.
-        _global_best_score (float): The best score achieved.
-    """
+    estimator_params = {param: config[param] for param in config}
+    estimator_params['callback'] = lambda x, score, context: tune.report(
+        {'iteration': context['Iteration'],
+         "Score": score,
+         "train_time": context['Train Time'],
+         "infer_time": context['Infer Time'],
+         "is_bad": not math.isfinite(score),
+         "should_checkpoint": False,
+         })
 
-    def setup(
-            self, config: Dict[str, Any], object_store_ref: Dict[str, ray.ObjectRef], fold_generator: StratifiedKFold,
-            metric: str
-    ) -> None:
-        self.fs_transformer = ray.get(object_store_ref['estimator'])
-        self.X, self.y = ray.get(object_store_ref['data'])
+    fs_transformer = fs_transformer.set_params(**estimator_params)
+    fs_transformer.fit(X, y)
 
-        if device == 'cuda':
-            self._gpu_id = ray.get_gpu_ids()[0]
 
-        self.metric = metric
-        self.scorer = get_scorer(self.metric)
-        self.cv_indices = fold_generator.split(self.X, self.y)
+#
+#       training_time = train_timer.duration
 
-        self.mean = 0
-
-        self.iter = 1
-
-        self._build(config)
-
-    def _build(self, config: Dict[str, Any]) -> None:
-        self._estimator_params = {param: config[param] for param in config}
-        self._global_best_model = None
-        self._global_best_score = 0.0
-
-    def step(self) -> Dict[str, Union[float, bool]]:
-        self.fs_transformer.set_params(**self._estimator_params)
-
-        fs_transformer = copy(self.fs_transformer)
-
-        # iterate through the folds
-        train_index, test_index = next(self.cv_indices)
-
-        with PerfTimer() as train_timer:
-            # X_filtered = self.fs_transformer.fit_transform(self.X[train_index], self.y[train_index])
-            X_filtered = fs_transformer.fit_transform(self.X, self.y)
-            trained_model = fs_transformer.estimator.fit(X_filtered, self.y)
-        training_time = train_timer.duration
-
-        with PerfTimer() as inference_timer:
-            X_filtered = fs_transformer.transform(self.X[test_index])
-            test_score = self.scorer(trained_model, X_filtered, self.y[test_index])
-        infer_time = inference_timer.duration
-
-        self.mean += (test_score - self.mean) / self.iter
-        self.iter += 1
-
-        if self.mean > self._global_best_score:
-            self._global_best_score = test_score
-            self._global_best_model = fs_transformer
-
-        return {
-            str(self.metric): self.mean,
-            "train_time": round(training_time, 4),
-            "infer_time": round(infer_time, 4),
-            "is_bad": not math.isfinite(self.mean),
-            "should_checkpoint": False,
-        }
-
-    def _save(self, checkpoint: Dict[str, Any]) -> None:
-        self._global_best_score = checkpoint[self.metric]
-
-    def _restore(self, checkpoint: Dict[str, Any]) -> Dict[str, Any]:
-        return {"test_score": self._global_best_score}
-
-    def save_checkpoint(self, checkpoint_dir: str) -> None:
-        pass
-
-    def reset_config(self, new_config: Dict[str, Any]) -> bool:
-        del self.fs_transformer
-        self._build(new_config)
-        self.config = new_config
-        return True
+#
+# class TrainTransformer(tune.Trainable):
+#     """
+#     A Ray Tune Trainable class that handles training and evaluation of a model pipeline.
+#
+#     Attributes:
+#         fs_transformer (BaseEstimator): The estimator to be trained.
+#         X (Any): The input features.
+#         y (Any): The target labels.
+#         metric (str): The metric used for evaluation.
+#         scorer (Callable): The scorer function based on the metric.
+#         cv_indices (Iterator): The cross-validation indices.
+#         mean (float): The running mean of the performance metric.
+#         iter (int): The current iteration count.
+#         _estimator_params (Dict[str, Any]): Parameters for the estimator.
+#         _global_best_model (BaseEstimator): The best model found during training.
+#         _global_best_score (float): The best score achieved.
+#     """
+#
+#     def setup(
+#             self, config: Dict[str, Any], object_store_ref: Dict[str, ray.ObjectRef], fold_generator: StratifiedKFold,
+#             metric: str
+#     ) -> None:
+#         self.fs_transformer = ray.get(object_store_ref['estimator'])
+#         self.X, self.y = ray.get(object_store_ref['data'])
+#
+#         if device == 'cuda':
+#             self._gpu_id = ray.get_gpu_ids()[0]
+#
+#         self.metric = metric
+#         self.scorer = get_scorer(self.metric)
+#         #self.cv_indices = fold_generator.split(self.X, self.y)
+#
+#         self.mean = 0
+#
+#         self.iter = 1
+#
+#         self._build(config)
+#
+#     def _build(self, config: Dict[str, Any]) -> None:
+#         self._estimator_params = {param: config[param] for param in config}
+#         self._global_best_model = None
+#         self._global_best_score = 0.0
+#
+#     def step(self) -> Dict[str, Union[float, bool]]:
+#         self.fs_transformer.set_params(**self._estimator_params)
+#
+#         fs_transformer = copy(self.fs_transformer)
+#
+#         # iterate through the folds
+#         #train_index, test_index = next(self.cv_indices)
+#
+#         with PerfTimer() as train_timer:
+#             # X_filtered = self.fs_transformer.fit_transform(self.X[train_index], self.y[train_index])
+#             X_filtered = fs_transformer.fit_transform(self.X, self.y)
+#             trained_model = fs_transformer.estimator.fit(X_filtered, self.y)
+#         training_time = train_timer.duration
+#
+#         with PerfTimer() as inference_timer:
+#             X_filtered = fs_transformer.transform(self.X[test_index])
+#             test_score = self.scorer(trained_model, X_filtered, self.y[test_index])
+#         infer_time = inference_timer.duration
+#
+#         self.mean += (test_score - self.mean) / self.iter
+#         self.iter += 1
+#
+#         if self.mean > self._global_best_score:
+#             self._global_best_score = test_score
+#             self._global_best_model = fs_transformer
+#
+#         return {
+#             str(self.metric): self.mean,
+#             "train_time": round(training_time, 4),
+#             "infer_time": round(infer_time, 4),
+#             "is_bad": not math.isfinite(self.mean),
+#             "should_checkpoint": False,
+#         }
+#
+#     def _save(self, checkpoint: Dict[str, Any]) -> None:
+#         self._global_best_score = checkpoint[self.metric]
+#
+#     def _restore(self, checkpoint: Dict[str, Any]) -> Dict[str, Any]:
+#         return {"test_score": self._global_best_score}
+#
+#     def save_checkpoint(self, checkpoint_dir: str) -> None:
+#         pass
+#
+#     def reset_config(self, new_config: Dict[str, Any]) -> bool:
+#         del self.fs_transformer
+#         self._build(new_config)
+#         self.config = new_config
+#         return True
 
 
 class DecoderOptimization:
@@ -214,8 +234,8 @@ class DecoderOptimization:
         self.device = device
 
         self.exp_name = exp_name
-        self.name = estimator[-1].__class__.__name__ if isinstance(estimator,
-                                                                   Pipeline) else estimator.__class__.__name__
+        self.name = estimator[-1].__class__.__name__ if isinstance(estimator, Pipeline) \
+            else estimator.__class__.__name__
         self.num_cv = fold_generator.n_splits
 
         self.diagnostics = None
@@ -251,10 +271,8 @@ class DecoderOptimization:
 
         analysis = tune.run(
             tune.with_parameters(
-                TrainTransformer,
+                train,
                 object_store_ref=refs,
-                fold_generator=self.fold_generator,
-                metric=self.metric
             ),
             name=self.exp_name,
             scheduler=sched,

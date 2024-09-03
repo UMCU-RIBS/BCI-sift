@@ -240,7 +240,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Optional[Dict[str, any]], default = None
          Optional parameters to adjust the estimator parameters.
-    :param metric: str, default = 'f1_weighted'
+    :param scoring: str, default = 'f1_weighted'
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
@@ -268,7 +268,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
     :param callback: Optional[Union[Callable, Type]], default = None, #TODO adjust and add design
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
-    :param seed: Optional[int], default = None
+    :param random_state: Optional[int], default = None
         Setting a seed to fix randomness (for reproducibility).
         Default does not use a seed.
     :param verbose: Union[bool, int], default = False
@@ -336,7 +336,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
             dims: Tuple[int, ...],
             estimator: Union[Any, Pipeline],
             estimator_params: Optional[Dict[str, any]] = None,
-            metric: str = 'f1_weighted',
+            scoring: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: Optional[numpy.ndarray] = None,
 
@@ -353,13 +353,13 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
             # Misc
             n_jobs: int = 1,
-            seed: Optional[int] = None,
+            random_state: Optional[int] = None,
             verbose: Union[bool, int] = False
     ) -> None:
 
         super().__init__(
-            dims, estimator, estimator_params, metric, cv, groups, tol,
-            patience, bounds, prior, callback, n_jobs, seed, verbose
+            dims, estimator, estimator_params, scoring, cv, groups, tol,
+            patience, bounds, prior, callback, n_jobs, random_state, verbose
         )
 
         # Spatial Stochastic Search Settings

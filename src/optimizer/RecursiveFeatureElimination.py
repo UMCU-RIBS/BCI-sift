@@ -38,7 +38,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
     :param estimator: Union[BaseEstimator, Pipeline]
         The machine learning estimator or pipeline to evaluate
         channel combinations.
-    :param metric: str, default = 'f1_weighted'
+    :param scoring: str, default = 'f1_weighted'
         The metric to optimize, compatible with scikit-learn metrics.
     :param cv: Union[BaseCrossValidator, int], default = 10
         Cross-validation splitting strategy, can be a fold number
@@ -54,7 +54,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
     :param n_jobs: int, default = 1
         Number of parallel jobs to run during cross-validation.
          '-1' uses all available cores.
-    :param seed: Optional[int], default = None
+    :param random_state: Optional[int], default = None
         Seed for randomness, ensuring reproducibility.
     :param verbose: Union[bool, int], default = False
         Enables verbose output during the optimization process.
@@ -97,7 +97,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
             # General and Decoder
             grid: numpy.array,
             estimator: Union[BaseEstimator, Pipeline],
-            metric: str = 'f1_weighted',
+            scoring: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: numpy.ndarray = None,
 
@@ -109,12 +109,12 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
             # Misc
             n_jobs: int = 1,
-            seed: Optional[int] = None,
+            random_state: Optional[int] = None,
             verbose: Union[bool, int] = False,
             **estimator_params: Dict[str, Any]
     ) -> None:
 
-        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose, **estimator_params)
+        super().__init__(grid, estimator, scoring, cv, groups, n_jobs, random_state, verbose, **estimator_params)
 
         # Recursive Feature Elimination Settings
         self.feature_retention_ratio = feature_retention_ratio
@@ -147,7 +147,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         self.result_grid_ = []
         self.ranks_ = []
 
-        self.set_estimator_params()
+        self._set_estimator_params()
 
         self.solution_, self.mask_, self.score_ = self._run()
 
@@ -199,9 +199,9 @@ class RecursiveFeatureElimination(BaseOptimizer):
         if self.cv == 1:
             # Use train-test split instead of cross-validation
             X_train, X_test, y_train, y_test = train_test_split(selected_features, self.y_, test_size=0.2,
-                                                                random_state=self.seed)
+                                                                random_state=self.random_state)
             self.estimator.fit(X_train, y_train)
-            scorer = get_scorer(self.metric)
+            scorer = get_scorer(self.scoring)
             # get feature weights
             getter = attrgetter(self.importance_getter)
             coefs = getter(self.estimator).reshape((getter(self.estimator).shape[0], -1, self.X_.shape[3]))
@@ -210,7 +210,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
         else:
             # Use cross-validation
-            results = cross_validate(self.estimator, selected_features, self.y_, scoring=get_scorer(self.metric),
+            results = cross_validate(self.estimator, selected_features, self.y_, scoring=get_scorer(self.scoring),
                                      cv=self.cv, groups=self.groups, n_jobs=self.n_jobs, return_estimator=True)
             res_ests = results['estimator']
             getter = attrgetter(self.importance_getter)

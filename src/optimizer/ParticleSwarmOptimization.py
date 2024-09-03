@@ -6,16 +6,26 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-
-from typing import Tuple, Union, Dict, Any, Optional
+import multiprocessing as mp
+from collections import deque
+from functools import partial
+from numbers import Real
+from typing import Tuple, Union, Dict, Any, Optional, Callable
 
 import numpy
 import numpy as np
-from pyswarms.discrete import BinaryPSO
-from pyswarms.single import GlobalBestPSO, LocalBestPSO
+from pyswarms.backend import BoundaryHandler, VelocityHandler, OptionsHandler, compute_pbest, create_swarm
+from pyswarms.backend.topology import Ring, Star
+from pyswarms.single import GlobalBestPSO
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
+from sklearn.utils._param_validation import (
+    Integral,
+    Interval,
+    StrOptions,
+)
+from tqdm import tqdm
 
 from .Base_Optimizer import BaseOptimizer
 
@@ -36,28 +46,46 @@ class ParticleSwarmOptimization(BaseOptimizer):
     behavior of birds or fish to find optimal solutions in a search
     space through position-velocity updates.
 
-    The global PSO Uses a star-topology where each particle is attracted
-    to the best-performing particle in the swarm. The position and velocity
-    updates are defined as:
-        Position: xi(t+1) = xi(t) + vi(t+1)
-        Velocity: vij(t+1) = w * vij(t) + c1 * r1j(t) *
-                             [yij(t) - xij(t)] + c2 * r2j(t) * [y^j(t) - xij(t)]
-    Here, 'w' is the inertia weight, 'c1' and 'c2' are cognitive and
-    social parameters respectively, controlling the particle's adherence
-    to  personal best and swarm's global best. This method is explorative
-    or exploitative based on the relative weighting of these parameters.
+    It takes a set of candidate solutions, and tries to find the best
+    solution using a position-velocity update method. The position
+    update can be defined as:
 
+    .. math:: x_{i}(t+1) = x_{i}(t) + v_{i}(t+1)
 
-    The Local PSO employs a ring topology, where each particle is influenced
-    by its local neighborhood's best performance rather than the global best.
-    The position and velocity updates are similar to the global PSO:
-        Position: xi(t+1) = xi(t) + vi(t+1)
-        Velocity: vij(t+1) = m * vij(t) + c1 * r1j(t) *
-                             [yij(t) - xij(t)] + c2 * r2j(t) * [y^j(t) - xij(t)]
-    However, each particle compares itself to the best in its neighborhood,
-    determined using a k-D tree to manage spatial queries based on L1 or
-    L2 distances. Local PSO generally converges slower than global PSO but
-    promotes more exploration, potentially escaping local optima more effectively.
+    Where the position at the current timestep :math:`t` is updated using
+    the computed velocity at :math:`t+1`.The velocity update, however,
+    depends on the neigborhood topology used. A global-best velocity
+    update uses a star-topology where each particle is attracted to the best
+    performing particle, which can be defined as:
+
+    .. math:: v_{ij}(t + 1) = w * v_{ij}(t) + c_{1}r_{1j}(t)[y_{ij}(t) − x_{ij}(t)]
+                              + c_{2}r_{2j}(t)[\hat{y}_{j}(t) − x_{ij}(t)]
+
+    Here, :math:`c1` and :math:`c2` are the cognitive and social parameters
+    respectively. They control the particle's behavior given two choices: (1) to
+    follow its *personal best* or (2) follow the swarm's *global best* position.
+    Overall, this dictates if the swarm is explorative or exploitative in nature.
+    In addition, a parameter :math:`w` controls the inertia of the swarm's
+    movement.
+
+    On the contrary, a local velocity update uses a ring topology, thus making the
+    particles attracted to its corresponding neighborhood rather than the global best,
+    which can be defined as:
+
+    .. math:: v_{ij}(t + 1) = m * v_{ij}(t) + c_{1}r_{1j}(t)[y_{ij}(t) − x_{ij}(t)]
+                              + c_{2}r_{2j}(t)[\hat{y}_{j}(t) − x_{ij}(t)]
+
+    However, in local-best PSO, a particle doesn't compare itself to the
+    overall performance of the swarm. Instead, it looks at the performance
+    of its nearest-neighbours, and compares itself with them. In general,
+    this kind of topology takes much more time to converge, but has a more
+    powerful explorative feature.
+
+    In this implementation, a neighbor is selected via a k-D tree
+    imported from :code:`scipy`. Distance are computed with either
+    the L1 or L2 distance. The nearest-neighbours are then queried from
+    this k-D tree. They are computed for every iteration. For more information,
+    consult the documentation fo the PySwarms library.
 
     Both methods update each particle's position based on its velocity at
     each time step, with the ultimate goal of finding the optimal configuration
@@ -71,19 +99,23 @@ class ParticleSwarmOptimization(BaseOptimizer):
         dimension 'zero', which represents the samples.
     :param estimator: Union[Any, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
-    :param estimator_params: Optional[Dict[str, any]], default = None
+    :param estimator_params: Dict[str, any], optional
          Optional parameters to adjust the estimator parameters.
-    :param metric: str, default = 'f1_weighted'
+    :param scoring: str, default = 'f1_weighted'
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
         If an integer is passed, train_test_split() for 1 and
         StratifiedKFold() is used for >1 as default.
-    :param groups: Optional[numpy.ndarray], default = None
-        Groups for LeaveOneGroupOut-crossvalidator
-    :param method: str, default = 'global'
-        The variant of PSO to use ('global' for global best PSO, 'local'
-        for local best PSO).
+    :param groups: numpy.ndarray, optional
+        Groups for a LeaveOneGroupOut generator
+    :param topology: str, default = 'global'
+        alid ovptions are 'global and 'local'.
+            * Global: Uses a star-topology, where every particle compares
+              itself with the best-performing particle in the swarm, whereas
+            * 'Local': Uses a ring topology, where every particle compares
+              itself only with its nearest-neighbours as computed by a distance
+              metric.
     :param n_particles: int, default = 80
         The number of particles in the swarm.
     :param n_iter: int, default = 100
@@ -95,35 +127,72 @@ class ParticleSwarmOptimization(BaseOptimizer):
     :param w: float, default = 0.9
         Inertia weight of the PSO.
     :param k: int, default = 20
-        Number of neighbors to consider in local best PSO.
+         The number of neighbors to be considered. Must be a positive
+         integer less than :code:`n_particles`. For 'local' topology only.
     :param p: int, default = 2
-        The power parameter for local best PSO.
-    :param oh_strategy: Optional[str], default = None
-        The strategy for handling boundary conditions of the particles.
+        The power parameter uses the Minkowski p-norm to use.
+        1 is the sum-of-absolute values (or L1 distance) while 2 is
+        the Euclidean (or L2) distance. For 'local' topology only.
+    :param oh_strategy: Optional[str], optional
+        The update schedule to adjust 'c1', 'c2', 'w', 'k' and 'p'
+        during the optimization (for each n_iter). Valid options are:
+        'constant', 'exp_decay', 'lin_variation', 'random' and 'nonlin_mod'.
+            * Constant: The parameter does not change.
+            * Exponential decay: Decreases the parameter exponentially between limits.
+            * Linear variation: Decreases/increases the parameter linearly between limits.
+            * Random: takes a uniform random value between (0.5,1)
+            * Nonlinear modulation: Decreases/increases the parameter between limits
+              according to a nonlinear modulation index.
     :param bh_strategy: str, default = 'periodic'
-        The boundary handling strategy in PSO.
-    :param velocity_clamp: Optional[Tuple[float, float]], default = None
+        The strategy for the handeling of the out-of-bounds
+        particles. Valid options are: 'nearest', 'random',
+        'shrink', 'reflective', 'intermediate' and 'periodic'.
+            * Nearest: Reposition the particle to the nearest bound.
+            * Random: Reposition the particle randomly in between the bounds.
+            * Shrink: Shrink the velocity of the particle such that it lands
+              on the bounds.
+            * Reflective: Mirror the particle position from outside the bounds
+              to inside the bounds.
+            * Intermediate: Reposition the particle to the midpoint between its
+              current position on the bound surpassing axis and the bound itself.
+              This only adjusts the axes that surpass the boundaries.
+            * Periodic: Resets the particles using the modulo function to cut down
+              the position. This creates a virtual, periodic plane which is tiled
+              with the search space.
+    :param velocity_clamp: Optional[Tuple[float, float]], optional
         A tuple specifying the minimum and maximum velocity of particles.
     :param vh_strategy: str, default = 'unmodified'
-        The velocity handling strategy in PSO.
+        The strategy for the handeling of the velocity out-of-bounds
+        particles. Valid options are 'unmodified',
+         'adjust', 'invert' and 'zero'.
+            * Unmodified: Returns the unmodified velocites.
+            * Adjust: Returns the velocity that is adjusted to be the distance between the current
+              and the previous position.
+            * Invert: Inverts and shrinks the velocity by the factor :code:`-z`.
+            * Zero: Sets the velocity of out-of-bounds particles to zero.
     :param center: float, default = 1.0
         The center point influence in the topology of the swarm.
-    :param tol: float, default = 1e-5
-        The function tolerance; if the change in the best objective value
-        is below this for `patientce` iterations, the optimization will stop early.
     :param patience: int, default = 1e5
         The number of iterations for which the objective function
-        improvement must be below `tol` to stop optimization.
+        improvement must be below tol to stop optimization.
+    :param tol: float, default = 1e-5
+        The function tolerance; if the change in the best objective value
+        is below this for 'patience' iterations, the optimization will stop early.
     :param bounds: Tuple[float, float], default = (0.0, 1.0)
         Bounds for the algorithm's parameters to optimize. Since
         it is a binary selection task, bounds are set to (0.0, 1.0).
-    :param prior: Optional[numpy.ndarray], default = None
+    :param prior: numpy.ndarray, optional
         Explicitly initialize the optimizer state.
         If set to None if the to be optimized features are
         initialized randomly within the bounds.
+    :param callback: Callable, optional
+        A callback function of the structure :code: `callback(x, f, context)`,
+        which will be called at each iteration. :code: `x` and :code: `f`
+        are the solution and function value, and :code: `context` contains
+        the diagnostics of the current iteration.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
-    :param seed: Optional[int], default = None
+    :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
         Default does not use a seed.
     :param verbose: Union[bool, int], default = False
@@ -138,14 +207,13 @@ class ParticleSwarmOptimization(BaseOptimizer):
         Transform the input data using the mask from the optimization process.
     - run:
         Execute the PSO optimization algorithm.
-    - evaluate_candidates:
-        Evaluates the selected features using cross-validation or train-test split.
-    - objective_function:
-        Calculates the score to maximize or minimize based on the provided mask.
-    - elimination_plot:
-        Generates and saves a plot visualizing the maximum and all scores across different subgrid sizes.
-    - importance_plot:
-        Generates and saves a heatmap visualizing the importance of each channel within the grid.
+    - handle_prior
+        Shapes the prior to fit the PSO framework.
+    - handle bounds
+        Shapes the optimization bounds to fit the PSO framework.
+    - compute_objective_function
+        Applies particle solutrion to the objective function using single
+        or multi core processing.
 
 
     Notes:
@@ -153,7 +221,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
     This implementation is semi-compatible with the scikit-learn
     framework, which builds around two-dimensional feature matrices.
     To use this transfortmation within a scikit-learn Pipeline, the
-    four dimensional data must eb flattened after the first dimension
+    four dimensional data must be flattened after the first dimension
     [samples, features]. For example, scikit-learn's FunctionTransformer can
     achieve this.
 
@@ -171,29 +239,49 @@ class ParticleSwarmOptimization(BaseOptimizer):
     The following example shows how to retrieve a feature mask for
     a synthetic data set.
 
-    # >>> import numpy as np
-    # >>> from sklearn.svm import SVC
-    # >>> from sklearn.pipeline import Pipeline
-    # >>> from sklearn.preprocessing import MinMaxScaler
-    # >>> from sklearn.datasets import make_classification
-    # >>> from FingersVsGestures.src.channel_elimination import ParticleSwarmOptimization # TODO adjust
-    # >>> X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
-    # >>> X = X.reshape((100, 8, 4, 100))
-    # >>> grid = np.arange(1, 33).reshape(X.shape[1:3])
-    # >>> estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
+    .. code-block:: python
 
-    # >>> pso = ParticleSwarmOptimization(grid, estimator)
-    # >>> pso.fit(X, y)
-    # >>> print(pso.mask_)
-    array([[False  True False False], [False False False False], [False False False False], [ True False False False]
-           [False False False False], [False False False False], [False False False False]])
-    # >>> print(pso.score_)
-    35.275396825396825
+        import numpy
+        from sklearn.svm import SVC
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import MinMaxScaler
+        from sklearn.datasets import make_classification
+        from FingersVsGestures.src.channel_elimination import ParticleSwarmOptimization # TODO adjust
+
+        X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
+        X = X.reshape((100, 8, 4, 100))
+        grid = numpy.arange(1, 33).reshape(X.shape[1:3])
+        estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
+
+        pso = ParticleSwarmOptimization(grid, estimator)
+        pso.fit(X, y)
+        print(pso.score_)
+        35.275396825396825
 
     Return:
     -------
     :return: None
     """
+    _parameter_constraints: dict = {**BaseOptimizer._parameter_constraints}
+    _parameter_constraints.update(
+        {
+            "topology": [StrOptions({"global", "local"})],
+            "n_particles": [Interval(Integral, 1, None, closed="left")],
+            "n_iter": [Interval(Integral, 1, None, closed="left")],
+            "c1": [Interval(Real, 0, None, closed="left")],
+            "c2": [Interval(Real, 0, None, closed="left")],
+            "w": [Interval(Real, 0, 1, closed="both")],
+            "k": [Interval(Integral, 1, None, closed="left")],
+            "p": [Interval(Integral, 1, None, closed="left")],
+            "oh_strategy": [StrOptions(
+                {'exp_decay', 'lin_variation', 'random', 'nonlin_mod'}), None],
+            "bh_strategy": [StrOptions(
+                {'nearest', 'random', 'shrink', 'reflective', 'intermediate', 'periodic'})],
+            "velocity_clamp": [tuple, None],
+            "vh_strategy": [StrOptions({'unmodified', 'adjust', 'invert', 'zero'})],
+            "center": [Interval(Real, 0, None, closed="left")],
+        }
+    )
 
     def __init__(
             self,
@@ -202,12 +290,12 @@ class ParticleSwarmOptimization(BaseOptimizer):
             dims: Tuple[int, ...],
             estimator: Union[Any, Pipeline],
             estimator_params: Optional[Dict[str, any]] = None,
-            metric: str = 'f1_weighted',
+            scoring: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: Optional[numpy.ndarray] = None,
 
             # Particle Swarm Optimization Settings
-            method: str = 'global',
+            topology: str = 'global',
             n_particles: int = 80,
             n_iter: int = 100,
 
@@ -225,23 +313,24 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
             # Training Settings
             tol: float = 1e-5,
-            patience: int = 1e5,
+            patience: int = int(1e5),
             bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
+            callback: Optional[Callable] = None,
 
             # Misc
             n_jobs: int = 1,
-            seed: Optional[int] = None,
+            random_state: Optional[int] = None,
             verbose: Union[bool, int] = False
     ) -> None:
 
         super().__init__(
-            dims, estimator, estimator_params, metric, cv, groups, bounds, prior, n_jobs, seed, verbose
+            dims, estimator, estimator_params, scoring, cv, groups, tol,
+            patience, bounds, prior, callback, n_jobs, random_state, verbose
         )
 
         # Particle Swarm Optimization Settings
-        self.method = method
-        self.bounds = bounds
+        self.topology = topology
         self.n_particles = n_particles
         self.n_iter = n_iter
 
@@ -257,53 +346,165 @@ class ParticleSwarmOptimization(BaseOptimizer):
         self.vh_strategy = vh_strategy
         self.center = center
 
-        # Training Settings
-        self.tol = tol
-        self.patience = patience
-
     def _run(
             self
     ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
         Run the PSO algorithm to optimize the channel configuration.
+        Performs the optimization to evaluate the objective
+        function :code:`f` for a number of iterations :code:`n_iter.`
 
         Returns:
         --------
         Tuple[numpy.ndarray, numpy.ndarray, float]
             The best solution, mask found and their score.
         """
-        # Initialize PSO algorithm
-        method = self._init_method()
+        # # Initialize PSO algorithm
+        # method = self._init_algorithm()
+        #
+        # # Optimize Feature Selection
+        # cost, pos = method.optimize(
+        #     self._objective_function_wrapper, iters=self.n_iter, verbose=self.verbose, n_processes=self.n_jobs
+        # )
+        context = {}
+        if not self.patience > 0:
+            raise ValueError(
+                "patience expects an integer value greater than 0"
+            )
+        if self.oh_strategy is None:
+            self.oh_strategy = {}
 
-        # Optimize Feature Selection
-        cost, pos = method.optimize(
-            self._objective_function_wrapper, iters=self.n_iter, verbose=self.verbose  # , n_processes=self.algo_cores_
+        # Assign k-neighbors and p-value as attributes
+        options = {'c1': self.c1, 'c2': self.c2, 'w': self.w}
+        if self.topology == 'local':
+            options = {**options, 'k': self.k, 'p': self.p}
+
+        # Initialize the topology
+        top = Ring(static=False) if self.topology == 'local' else Star()
+        bh = BoundaryHandler(strategy=self.bh_strategy)
+        vh = VelocityHandler(strategy=self.vh_strategy)
+        oh = OptionsHandler(strategy=self.oh_strategy)
+
+        # Initialize the swarm
+        swarm = create_swarm(
+            n_particles=self.n_particles,
+            dimensions=int(numpy.prod(self.dim_size_)),
+            bounds=self.bounds_,
+            center=self.center,
+            init_pos=self.prior_,
+            clamp=self.velocity_clamp,
+            options=options,
         )
+        swarm_size = (self.n_particles, numpy.prod(self.dim_size_))
+        swarm.pbest_cost = numpy.full(swarm_size[0], numpy.inf)
 
-        best_state = self._mask_to_input_dims((pos > 0.5).reshape(self.dim_size_))  # (self.grid.shape)
-        best_score = -cost * 100
-        return pos, best_state, best_score
+        # Populate memory of the handlers
+        bh.memory = swarm.position
+        vh.memory = swarm.position
+
+        # Setup Pool of processes for parallel evaluation
+        pool = None if self.n_jobs == 1 else mp.Pool(self.n_jobs)
+        ftol_history = deque(maxlen=self.patience)
+
+        # Run Search
+        progress_bar = tqdm(
+            range(self.n_iter), desc=self.__class__.__name__, postfix=f'{-swarm.best_cost:.6f}',
+            disable=not self.verbose, leave=True
+        )
+        for self.iter_ in progress_bar:
+            # Compute cost for current position and personal best
+            swarm.current_cost = self.compute_objective_function(
+                swarm, self._objective_function_wrapper, pool=pool
+            )
+            swarm.pbest_pos, swarm.pbest_cost = compute_pbest(
+                swarm
+            )
+            best_cost_yet_found = numpy.min(swarm.best_cost)
+
+            # Update gbest from the neighborhood
+            if self.topology == 'local':
+                swarm.best_pos, swarm.best_cost = top.compute_gbest(
+                    swarm, p=self.p, k=self.k
+                )
+            else:
+                swarm.best_pos, swarm.best_cost = top.compute_gbest(
+                    swarm
+                )
+
+            # verbosity and early stopping
+            progress_bar.set_postfix(best_score=f'{swarm.best_cost:.6f}')
+            if swarm.best_cost <= -1.0:
+                progress_bar.set_postfix(
+                    best_score=f'Maximum score reached: {swarm.best_cost:.6f}'
+                )
+                break
+            elif self.callback is not None:
+                if self.callback(swarm.best_cost, swarm.position, self.result_grid_[-1]):
+                    progress_bar.set_postfix(
+                        best_score=f'Stopped by callback: {swarm.best_cost:.6f}')
+                    break
+
+            # Verify stop criteria based on the relative acceptable cost tol
+            relative_measure = self.tol * (1 + numpy.abs(best_cost_yet_found))
+            delta = (
+                    numpy.abs(swarm.best_cost - best_cost_yet_found)
+                    < relative_measure
+            )
+            if self.iter_ < self.patience:
+                ftol_history.append(delta)
+            else:
+                ftol_history.append(delta)
+                if all(ftol_history):
+                    progress_bar.set_postfix(
+                        best_score=f'Early Stopping Criteria reached: {swarm.best_cost:.6f}'
+                    )
+                    break
+
+            # Perform options update
+            swarm.options = oh(
+                options, iternow=self.iter_, itermax=self.n_iter
+            )
+            # Perform velocity and position updates
+            swarm.velocity = top.compute_velocity(
+                swarm, self.velocity_clamp, vh, self.bounds_
+            )
+            swarm.position = top.compute_position(
+                swarm, self.bounds_, bh
+            )
+
+        # Obtain the final best_cost and the final best_position
+        final_best_cost = swarm.best_cost.copy()
+        final_best_pos = swarm.pbest_pos[
+            swarm.pbest_cost.argmin()
+        ].copy()
+        best_state = self._prepare_mask((final_best_pos > 0.5).reshape(self.dim_size_))  # (self.grid.shape)
+        best_score = -final_best_cost * 100
+
+        # Close Pool of Processes
+        if self.n_jobs != 1:
+            pool.close()
+        return final_best_pos, best_state, best_score
 
     def _handle_bounds(
             self
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> Tuple[numpy.ndarray, numpy.ndarray]:
         """
         Returns the bounds for the PSO optimizer. If bounds are not set, default bounds
         of [0, 1] for each dimension are used.
 
         Returns:
         --------
-        :return: Tuple[np.ndarray, np.ndarray]
+        :return: Tuple[numpy.ndarray, numpy.ndarray]
             A tuple of two numpy arrays representing the lower and upper bounds.
         """
         return (
-            np.full(np.prod(self.dim_size_), self.bounds[0]),  # np.array([self.bounds[0]] * np.prod(self.dim_size_)),
-            np.full(np.prod(self.dim_size_), self.bounds[1])  # np.array(self.bounds[1] * np.prod(self.dim_size_))
+            numpy.full(numpy.prod(self.dim_size_), self.bounds[0]),
+            numpy.full(numpy.prod(self.dim_size_), self.bounds[1])
         )
 
     def _handle_prior(
             self
-    ) -> Optional[np.ndarray]:
+    ) -> Optional[numpy.ndarray]:
         """
         Generates a list of prior individuals based on a provided
         prior mask. The function checks the validity of the prior
@@ -312,20 +513,20 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
         Returns:
         -------
-        :return: Optional[np.ndarray]
+        :return: Optional[numpy.ndarray]
             A numpy array of transformed prior values or None if no prior is provided.
         """
         prior = self.prior
-        if prior is not None:
+        if self.prior:
             if self.prior.shape != self.dim_size_:  # self.grid.reshape(-1).shape:
                 raise RuntimeError(
                     f'The argument prior must match the size of the dimensions to be considered.'
                     f'Got {self.prior.shape} but expected {self.dim_size_}.')  # {self.grid.reshape(-1).shape}.')
 
-            particle_pos = np.tile(self.prior.astype(float), (self.n_particles, 1))
-            prior = np.array(
-                [np.where(x > 0.5, 0.51 + np.random.normal(loc=0, scale=0.06125),
-                          0.49 - np.random.normal(loc=0, scale=0.06125))
+            particle_pos = numpy.tile(self.prior.astype(float), (self.n_particles, 1))
+            prior = numpy.array(
+                [numpy.where(x > 0.5, 0.51 + numpy.random.normal(loc=0, scale=0.06125),
+                             0.49 - numpy.random.normal(loc=0, scale=0.06125))
                  for i, x in enumerate(list(particle_pos))]
             )
         return prior
@@ -348,16 +549,71 @@ class ParticleSwarmOptimization(BaseOptimizer):
         numpy.ndarray
             An array of fitness values for each particle in the swarm.
         """
+        return numpy.array([-self._objective_function(x[i]) for i in range(x.shape[0])])
+
+    def _objective_function_wrapper(
+            self, x: numpy.ndarray
+    ) -> numpy.ndarray:
+        """
+        Wraps the objective function to adapt it for compatibility with the PSO algorithm. This method allows
+        the PSO algorithm to interface correctly with the objective function by converting the input particle
+        positions into a suitable format and evaluating them.
+
+        Parameters:
+        -----------
+        x : numpy.ndarray
+            An array of particle positions representing potential solutions.
+
+        Returns:
+        --------
+        numpy.ndarray
+            An array of fitness values for each particle in the swarm.
+        """
         return np.array([-self._objective_function(x[i]) for i in range(x.shape[0])])
 
-    def _init_method(
+    @staticmethod
+    def compute_objective_function(swarm, objective_func, pool=None, **kwargs):
+        """Evaluate particles using the objective function
+
+        This method evaluates each particle in the swarm according to the objective
+        function passed.
+
+        If a pool is passed, then the evaluation of the particles is done in
+        parallel using multiple processes.
+
+        Parameters
+        ----------
+        swarm : pyswarms.backend.swarms.Swarm
+            a Swarm instance
+        objective_func : function
+            objective function to be evaluated
+        pool: multiprocessing.Pool, optional
+            multiprocessing.Pool to be used for parallel particle evaluation
+        kwargs : dict
+            arguments for the objective function
+
+        Returns
+        -------
+        numpy.ndarray
+            Cost-matrix for the given swarm
+        """
+        if pool is None:
+            return objective_func(swarm.position, **kwargs)
+        else:
+            results = pool.map(
+                partial(objective_func, **kwargs),
+                np.array_split(swarm.position, pool._processes)
+            )
+            return np.concatenate(results)
+
+    def _init_algorithm(
             self
-    ) -> Union[GlobalBestPSO, LocalBestPSO]:
+    ) -> GlobalBestPSO:
         """
         Initializes the PSO optimizer based on the specified method
         and parameters.
 
-        :return: Union[GlobalBestPSO, LocalBestPSO]
+        :return: GlobalLocalPSO
             The initialized PSO optimizer object.
         """
         # Prepare the arguments for the PSO optimizer
@@ -373,15 +629,8 @@ class ParticleSwarmOptimization(BaseOptimizer):
             'center': self.center,
             'init_pos': self.prior_,
             'ftol': self.tol,
-            'ftol_iter': self.patience
-        }
-
-        # Define the method library
-        method_lib = {
-            'global': GlobalBestPSO(**method_args),
-            'local': LocalBestPSO(**method_args),
-            'binary': BinaryPSO(**method_args)
+            'ftol_iter': self.patience,
         }
 
         # Return the appropriate optimizer based on the selected method
-        return method_lib[self.method]
+        return GlobalBestPSO(**method_args)  # GlobalLocalPSO(**method_args)

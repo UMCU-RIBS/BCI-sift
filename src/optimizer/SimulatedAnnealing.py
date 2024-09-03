@@ -88,7 +88,7 @@ class SimulatedAnnealing(BaseOptimizer):
         The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Optional[Dict[str, any]], default = None
          Optional parameters to adjust the estimator parameters.
-    :param metric: str, default = 'f1_weighted'
+    :param scoring: str, default = 'f1_weighted'
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
@@ -144,7 +144,7 @@ class SimulatedAnnealing(BaseOptimizer):
         If the callback implementation returns True, the algorithm will stop.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
-    :param seed: Optional[int], default = None
+    :param random_state: Optional[int], default = None
         Setting a seed to fix randomness (for reproducibility).
         Default does not use a seed.
     :param verbose: Union[bool, int], default = False
@@ -230,7 +230,7 @@ class SimulatedAnnealing(BaseOptimizer):
             dims: Tuple[int, ...],
             estimator: Union[Any, Pipeline],
             estimator_params: Optional[Dict[str, any]] = None,
-            metric: str = 'f1_weighted',
+            scoring: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: Optional[numpy.ndarray] = None,
 
@@ -253,13 +253,13 @@ class SimulatedAnnealing(BaseOptimizer):
 
             # Misc
             n_jobs: int = 1,
-            seed: Optional[int] = None,
+            random_state: Optional[int] = None,
             verbose: Union[bool, int] = False
     ) -> None:
 
         super().__init__(
-            dims, estimator, estimator_params, metric, cv, groups, tol,
-            patience, bounds, prior, callback, n_jobs, seed, verbose
+            dims, estimator, estimator_params, scoring, cv, groups, tol,
+            patience, bounds, prior, callback, n_jobs, random_state, verbose
         )
 
         # Simulated Annealing Settings
@@ -310,7 +310,7 @@ class SimulatedAnnealing(BaseOptimizer):
         if not len(lower) == len(upper):
             raise ValueError('Bounds do not have the same dimensions')
 
-        minimizer_kwargs = {'method': self.optimizer_method}
+        minimizer_kwargs = {'method': self.optimizer_method, 'tol': self.tol}
 
         # Wrapper for the objective function
         func_wrapper = ObjectiveFunWrapper(lambda x: -self._objective_function(x), self.maxfun)
@@ -319,7 +319,7 @@ class SimulatedAnnealing(BaseOptimizer):
             self.bounds_, func_wrapper, **minimizer_kwargs)
 
         # Initialization of random Generator for reproducible runs if seed provided
-        rand_state = check_random_state(self.seed)
+        rand_state = check_random_state(self.random_state)
         # Initialization of the energy state
         energy_state = EnergyState(lower, upper)
         energy_state.reset(func_wrapper, rand_state, self.prior_)
@@ -344,26 +344,45 @@ class SimulatedAnnealing(BaseOptimizer):
         t1 = np.exp((self.visit - 1) * np.log(2.0)) - 1.0
         # Run the search loop
         while not need_to_stop:
-            progress_bar = tqdm(range(self.n_iter), desc=self.__class__.__name__, postfix=f'{best_score:.6f}',
+            progress_bar = tqdm(range(self.n_iter), desc=self.__class__.__name__, postfix=f'{-best_score:.6f}',
                                 disable=not self.verbose, leave=True)
-            for i in progress_bar:
+            for self.iter_ in progress_bar:
                 # Compute temperature for this step
-                s = float(i) + 2.0
+                s = float(self.iter_) + 2.0
                 t2 = np.exp((self.visit - 1) * np.log(s)) - 1.0
                 temperature = self.initial_temp * t1 / t2
                 # Update logs and early stopping
                 score = energy_state.ebest
                 if best_score > score:
                     best_score = score
-                    progress_bar.set_postfix(best_score=f'{best_score:.6f}')
+                    progress_bar.set_postfix(
+                        best_score=f'{-best_score:.6f}'
+                    )
                     if abs(best_score - score) > self.tol:
                         wait = 0
-                if wait > self.patience or score <= -1.0:
-                    progress_bar.write(f"\nMaximum score reached")
+                if wait > self.patience:
+                    progress_bar.set_postfix(
+                        best_score=f'Early Stopping Criteria reached: {-best_score:.6f}'
+                    )
+                    message.append("Early Stopping Criteria reached")
+                    need_to_stop = True
+                    break
+                elif score <= -1.0:
+                    progress_bar.set_postfix(
+                        best_score=f'Maximum score reached: {-best_score:.6f}'
+                    )
                     message.append("Maximum score reached")
                     need_to_stop = True
                     break
-                if iteration >= self.n_iter:
+                elif self.callback is not None:
+                    if self.callback(energy_state.ebest, energy_state.xbest, **context):
+                        progress_bar.set_postfix(
+                            best_score=f'Stopped by callback: {-best_score:.6f}'
+                        )
+                        message.append("Maximum score reached")
+                        need_to_stop = True
+                        break
+                elif iteration >= self.n_iter:
                     message.append("Maximum number of iteration reached")
                     need_to_stop = True
                     break
@@ -372,7 +391,7 @@ class SimulatedAnnealing(BaseOptimizer):
                     energy_state.reset(func_wrapper, rand_state)
                     break
                 # starting strategy chain
-                val = strategy_chain.run(i, temperature)
+                val = strategy_chain.run(self.iter_, temperature)
                 if val is not None:
                     message.append(val)
                     need_to_stop = True
@@ -432,7 +451,7 @@ class SimulatedAnnealing(BaseOptimizer):
         """
         # Determine the prior values from the mask if provided
         prior = self.prior
-        if self.prior is not None:
+        if self.prior:
             if self.prior.shape != self.dim_size_:  # self.grid.reshape(-1).shape:
                 raise RuntimeError(
                     f'The argument prior must match the size of the dimensions to be considered.'

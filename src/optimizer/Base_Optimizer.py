@@ -6,31 +6,37 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-
+import multiprocessing as mp
 import random
 import warnings
-from copy import copy
+from abc import ABC, abstractmethod
+from numbers import Real
 from typing import Tuple, Union, Dict, Any, Optional, Type, Callable
 
 import matplotlib
 import numpy
-import numpy as np
 import pandas as pd
 from scipy import stats
-from sklearn.base import TransformerMixin, MetaEstimatorMixin, BaseEstimator
-from sklearn.metrics import get_scorer
-from sklearn.model_selection import BaseCrossValidator
-from sklearn.model_selection import cross_val_score, train_test_split
+from sklearn.base import TransformerMixin, MetaEstimatorMixin, BaseEstimator, clone, _fit_context
+from sklearn.metrics import get_scorer, get_scorer_names
+from sklearn.model_selection import BaseCrossValidator, cross_validate
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
+from sklearn.utils._param_validation import (
+    Integral,
+    Interval,
+    StrOptions, HasMethods,
+)
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
 from sklearn.utils.validation import check_is_fitted
 
 from src.optimizer.backend._backend import FlattenTransformer, SafeVarianceThreshold
+from src.utils.hp_tune import PerfTimer
 
 matplotlib.use('Agg')  # Use the 'Agg' backend for PNG rendering
 
 
-class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _RoutingNotSupportedMixin
+class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _RoutingNotSupportedMixin
     """
     Base class for all channel optimizers that provides framework
     functionalities such as estimator serialization, cross-validation
@@ -47,16 +53,16 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         dimension 'zero', which represents the samples.
     :param estimator: Union[Any, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
-    :param estimator_params: Optional[Dict[str, any]], default = None
+    :param estimator_params: Dict[str, any], optional
          Optional parameters to adjust the estimator parameters.
-    :param metric: str, default = 'f1_weighted'
+    :param scoring: str, default = 'f1_weighted'
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int], default = 10
         The cross-validation strategy or number of folds.
         If an integer is passed, train_test_split() for 1 and
         StratifiedKFold() is used for >1 as default.
-    :param groups: Optional[numpy.ndarray], default = None
-        Groups for LeaveOneGroupOut-crossvalidator
+    :param groups: Optional[numpy.ndarray], optional
+        Groups for a LeaveOneGroupOut generator
     :param patience: int, default = 1e5
         The number of iterations for which the objective function
         improvement must be below tol to stop optimization.
@@ -66,14 +72,18 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
     :param bounds: Tuple[float, float], default = (0.0, 1.0)
         Bounds for the algorithm's parameters to optimize. Since
         it is a binary selection task, bounds are set to (0.0, 1.0).
-    :param prior: Optional[numpy.ndarray], default = None
+    :param prior: numpy.ndarray, optional
         Explicitly initialize the optimizer state.
         If set to None if the to be optimized features are
         initialized randomly within the bounds.
-    :param callback: Optional[Union[Callable, Type]], default = None, #TODO add description and callback design
+    :param callback: Callable, optional
+        A callback function of the structure :code: `callback(x, f, context)`,
+        which will be called at each iteration. :code: `x` and :code: `f`
+        are the solution and function value, and :code: `context` contains
+        the diagnostics of the current iteration.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
-    :param seed: Optional[int], default = None
+    :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
         Default does not use a seed.
     :param verbose: Union[bool, int], default = False
@@ -82,6 +92,8 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
 
     Methods:
     --------
+    - reset:
+        Resets the class attributes of the fit method.
     - fit:
         Abstract method that must be implemented by subclasses, defining
         the algorithm design and fit to the data.
@@ -89,16 +101,29 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         Abstract method that must be implemented by subclasses, executing
         the transformation for the data with the optimizer result.
     - run:
-        Abstract method that must be implemented by subclasses, defining
+        Abstract method that must be implemented by subclass, defining
         the specific steps of the optimization process.
+    - objective_function:
+        Links the current solution (mask) to the performance metric.
+    - prepare_mask:
+        Reshapes and broadcasts a mask to match the full shape of a data tensor.
     - evaluate_candidates:
         Evaluates the selected features using cross-validation or train-test split.
-    - objective_function:
-        Calculates the score to maximize or minimize based on the provided mask.
-    - elimination_plot:
-        Generates and saves a plot visualizing the maximum and all scores across different subgrid sizes.
-    - importance_plot:
-        Generates and saves a heatmap visualizing the importance of each channel within the grid.
+    - save_statistics
+        Saves the diagnostics at a given iteration.
+    - handle_prior
+        Abstract method that subclasses must implement, preparing the prior.
+    - handle bounds
+        Abstract method that subclasses must implement, preparing
+        the optimization bounds.
+    - set_estimator_params
+        Validate and sets estimator parameters.
+    - allocate_cpu_resources
+        Allocates CPU resources for cross-validation and algorithm parallelization.
+    - check_estimator_data_requirements
+        If the estimator 2-dimensional data, a pipline is introduced for compatibility.
+    - prepare_result_grid
+        Finalizes the result grid.
 
     Notes:
     ------
@@ -112,6 +137,22 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
     --------
     :return: None
     """
+    _parameter_constraints: dict = {
+        "dims": [tuple],
+        "estimator": [HasMethods(["fit"])],
+        "estimator_params": [dict, None],
+        "scoring": [StrOptions(set(get_scorer_names()))],
+        "cv": [Interval(Real, 0, None, closed="left"), 'cv_object'],
+        "groups": [numpy.ndarray, None],
+        "tol": [Interval(Real, 0, None, closed="left")],
+        "patience": [Interval(Integral, 0, None, closed="left")],
+        "bounds": [tuple],
+        "prior": [numpy.ndarray, None],
+        "callback": [callable, None],
+        "n_jobs": [Integral],
+        "seed": ['random_state'],
+        "verbose": ['verbose']
+    }
 
     def __init__(
             self,
@@ -120,7 +161,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             dims: Tuple[int, ...],
             estimator: Union[Any, Pipeline],
             estimator_params: Optional[Dict[str, any]] = None,
-            metric: str = 'f1_weighted',
+            scoring: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: Optional[numpy.ndarray] = None,
 
@@ -129,11 +170,11 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             patience: int = 1e5,
             bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
-            callback: Optional[Union[Callable, Type]] = None,
+            callback: Optional[Callable] = None,
 
             # Misc
             n_jobs: int = 1,
-            seed: Optional[int] = None,
+            random_state: Optional[int] = None,
             verbose: Union[bool, int] = False,
     ) -> None:
 
@@ -141,7 +182,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         self.dims = dims
         self.estimator = estimator
         self.estimator_params = estimator_params
-        self.metric = metric
+        self.scoring = scoring
         self.cv = cv
         self.groups = groups
 
@@ -150,11 +191,11 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         self.patience = patience
         self.bounds = bounds
         self.prior = prior
-        self.callback_ = callback
+        self.callback = callback
 
         # Misc
         self.n_jobs = n_jobs
-        self.seed = seed
+        self.random_state = random_state
         self.verbose = verbose
 
     def _reset(self):
@@ -178,8 +219,9 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             del self.mask_
             del self.score_
 
+    @_fit_context(prefer_skip_nested_validation=False)
     def fit(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
+            self, X: numpy.ndarray, y: Optional[numpy.ndarray] = None
     ) -> Type['BaseOptimizer']:
         """
         Fit method to fit the optimizer to the data.
@@ -189,7 +231,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         :param X: numpy.ndarray
             Array-like with dimensions (e.g.
             [samples, channel_height, channel_width, time])
-        :param y: numpy.ndarray, default = None
+        :param y: numpy.ndarray, optional
             Array-like with dimensions [targets].
 
         Return:
@@ -197,25 +239,37 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         :return: Type['BaseOptimizer']
         """
         self._reset()
-        random.seed(self.seed)
-        np.random.seed(self.seed)
 
         self.X_, self.y_ = self._validate_data(
             X, y, reset=False, ensure_2d=False, allow_nd=True
         )
+        del X, y
+
+        # init cross-validation generator
+        if isinstance(self.cv, int):
+            self.n_cv_ = self.cv
+            self.split_ = 1 - self.n_cv_ if self.n_cv_ < 1 else 0.2
+        else:
+            self.n_cv_ = self.cv.get_n_splits()
+            self.split_ = None
+
         if self.estimator_params:
-            self.set_estimator_params()
+            self._set_estimator_params()
         self._check_estimator_data_requirements()
 
+        random.seed(self.random_state)
+        numpy.random.seed(self.random_state)
+        if self.n_jobs > 1:
+            manager = mp.Manager()
+            self.result_grid_ = manager.list()
+        else:
+            self.result_grid_ = []
         self.iter_ = 0
-        self.result_grid_ = []
-        self.n_cv_ = self.cv if isinstance(self.cv, int) else self.cv.get_n_splits()
-
         # Make dimensions, size and slicing accessible to the objective function.
         # Slicing is used for broadcasting the mask (included dims) to all dimensions.
         self.dims_incl_ = sorted(self.dims)
-        self.dim_size_ = tuple(np.array(self.X_.shape)[list(self.dims)])
-        self.slices_ = [np.newaxis if dim not in self.dims_incl_
+        self.dim_size_ = tuple(numpy.array(self.X_.shape)[list(self.dims)])
+        self.slices_ = [numpy.newaxis if dim not in self.dims_incl_
                         else slice(None) for dim in range(self.X_.ndim)]
 
         self.bounds_ = self._handle_bounds()
@@ -227,7 +281,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         return self
 
     def transform(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
+            self, X: numpy.ndarray, y: Optional[numpy.ndarray] = None
     ) -> numpy.ndarray:
         """
         Transforms the input with the mask obtained from
@@ -237,7 +291,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         -----------
         :param X: numpy.ndarray
             Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
+        :param y: numpy.ndarray, optional
             Array-like with dimensions [targets].
 
         Return:
@@ -249,6 +303,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
 
         return X * self.mask_
 
+    @abstractmethod
     def _run(
             self
     ) -> NotImplementedError:
@@ -281,43 +336,42 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             The evaluation score for the selected features,
             or -inf if no features are selected.
         """
-        self.iter_ += 1
-
         # Convert mask to a boolean array if necessary
-        if np.array(mask).dtype != bool:
-            mask = np.array(mask) > 0.5
+        if numpy.array(mask).dtype != bool:
+            mask = numpy.array(mask) > 0.5
 
         full_mask = self._prepare_mask(mask)
         selected_features = self.X_ * full_mask
 
-        scores = self._evaluate_candidates(selected_features)
-        self._save_statistics(mask, scores)
-        return scores.mean()
+        scores, train_times, infer_times = self._evaluate_candidates(selected_features)
+        score, train_time, infer_time = scores.mean(), train_times.mean(), infer_times.mean()
+        self._save_statistics(mask, scores, train_time, infer_time)
+        return score
 
     def _prepare_mask(
-            self, mask: np.ndarray
-    ) -> np.ndarray:
+            self, mask: numpy.ndarray
+    ) -> numpy.ndarray:
         """
         Reshapes and broadcasts a mask to match the full shape of a data tensor.
 
         Parameters:
         -----------
-        :params mask : np.ndarray
+        :params mask : numpy.ndarray
             The mask to be reshaped and broadcasted.
 
         Returns:
         --------
-        :return: np.ndarray
+        :return: numpy.ndarray
             The full mask is broadcasted to match the shape of the data tensor.
         """
         reshaped_mask = mask.reshape(self.dim_size_)[tuple(self.slices_)]
-        full_mask = np.zeros(self.X_.shape, dtype=bool)
-        full_mask[np.broadcast_to(reshaped_mask, full_mask.shape)] = True
+        full_mask = numpy.zeros(self.X_.shape, dtype=bool)
+        full_mask[numpy.broadcast_to(reshaped_mask, full_mask.shape)] = True
         return full_mask
 
     def _evaluate_candidates(
             self, selected_features: numpy.ndarray
-    ) -> numpy.ndarray:
+    ) -> Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]:
         """
         Evaluate the given features using cross-validation or train-test split.
 
@@ -328,30 +382,40 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
 
         Returns:
         --------
-        :return: numpy.ndarray
-            The evaluation scores for the selected features.
+        :return: Tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]
+            The evaluation scores, training and inference time for the selected features.
         """
-        scorer = get_scorer(self.metric)
+        scorer = get_scorer(self.scoring)
 
+        # Handle the edge case where no features are selected
+        if selected_features.size == 0 or not numpy.any(selected_features):
+            return numpy.full((int(self.n_cv_),), fill_value=0.0), numpy.array([0]), numpy.array([0])
+
+        # Handle train-test split where n_cv_ <= 1
         if self.n_cv_ <= 1:
-            if selected_features.size == 0 or not np.any(selected_features):
-                return np.full((1,), fill_value=0.0)
+            # Split the data into train and test sets
             X_train, X_test, y_train, y_test = train_test_split(
-                selected_features, self.y_, test_size=self.n_cv_
-                if self.n_cv_ < 1 else 0.2, random_state=self.seed
+                selected_features, self.y_, test_size=self.split_, random_state=self.random_state
             )
-            scores = scorer(copy(self.estimator).fit(X_train, y_train), X_test, y_test)
-        else:
-            if selected_features.size == 0 or not np.any(selected_features):
-                return np.full(self.n_cv_, 0.0)
-            scores = cross_val_score(
-                self.estimator, selected_features, self.y_, scoring=scorer,
-                cv=self.cv, groups=self.groups, n_jobs=self.n_jobs
-            )
-        return scores
+            estimator_clone = clone(self.estimator)
+            # Measure training time
+            with PerfTimer() as train_timer:
+                self.estimator.fit(X_train, y_train)
+
+            # Measure testing time
+            with PerfTimer() as inference_timer:
+                scores = numpy.array(scorer(estimator_clone, X_test, y_test))
+            return numpy.array(scores), numpy.array(train_timer.duration), numpy.array(inference_timer.duration)
+
+        # Handle cross-validation where n_cv_ > 1
+        result = cross_validate(
+            self.estimator, selected_features, self.y_, scoring=scorer,
+            cv=self.cv, groups=self.groups, n_jobs=self.n_jobs
+        )
+        return result['test_score'], result['fit_time'], result['score_time']
 
     def _save_statistics(
-            self, mask: numpy.ndarray, scores: numpy.ndarray
+            self, mask: numpy.ndarray, scores: numpy.ndarray, train_time: float, infer_time: float
     ) -> None:
         """
         Saves the diagnostics at a given iteration. The
@@ -372,13 +436,15 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         :return: None
         """
         if self.n_cv_ > 1:
-            ci = stats.t.interval(0.95, len(scores) - 1, loc=np.mean(scores), scale=stats.sem(scores))
+            ci = stats.t.interval(0.95, len(scores) - 1, loc=numpy.mean(scores), scale=stats.sem(scores))
             cv_stats = {
-                'Mean (Score)': np.round(np.mean(scores), 5),
-                'Median (Score)': np.round(np.median(scores), 5),
-                'Std (Score)': np.round(np.std(scores), 5),
-                'CI Lower': np.round(ci[0], 5),
-                'CI Upper': np.round(ci[1], 5),
+                'Mean (Score)': numpy.round(numpy.mean(scores), 6),
+                'Median (Score)': numpy.round(numpy.median(scores), 6),
+                'Std (Score)': numpy.round(numpy.std(scores), 6),
+                'CI Lower': numpy.round(ci[0], 6),
+                'CI Upper': numpy.round(ci[1], 6),
+                'Train Time': train_time,
+                'Infer Time': infer_time
             }
         else:
             cv_stats = {'Mean (Score)': scores[0]}
@@ -390,10 +456,11 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             **{'Method': self.__class__.__name__,
                'Iteration': self.iter_,
                'Mask': [mask.reshape(self.dim_size_)],
-               'Size': np.sum(mask),
-               'Metric': self.metric},
+               'Size': numpy.sum(mask),
+               'Metric': self.scoring},
             **cv_stats}))
 
+    @abstractmethod
     def _handle_bounds(
             self
     ) -> NotImplementedError:
@@ -407,6 +474,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         """
         raise NotImplementedError('The _handle_bounds method must be implemented by subclasses.')
 
+    @abstractmethod
     def _handle_prior(
             self
     ) -> NotImplementedError:
@@ -420,7 +488,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         """
         raise NotImplementedError('The _handle_priors method must be implemented by subclasses.')
 
-    def set_estimator_params(
+    def _set_estimator_params(
             self
     ) -> None:
         """
@@ -452,34 +520,34 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
         else:
             self.estimator.set_params(**self.estimator_params)
 
-    def allocate_cpu_resources(
-            self, cv: int, n: int
-    ) -> Tuple[int, int]:
-        """
-        Choose the best (ea_cores, cv_cores) pair.
-
-        Parameters:
-        -----------
-        :param cv: int
-            Number of cross-validation folds.
-        :param n: int
-            Number of generations in the evolutionary algorithm.
-
-        Returns:
-        --------
-        returns: Tuple[int, int]
-            The best (ea_cores, cv_cores) pair satisfying the constraints.
-        """
-        pairs = [(algo_cores, self.n_jobs // algo_cores)
-                 for algo_cores in range(1, self.n_jobs + 1) if self.n_jobs % algo_cores == 0]
-        valid_pairs = [(algo_cores, cv_cores) for algo_cores, cv_cores in pairs if
-                       algo_cores <= n and cv_cores <= cv and cv % cv_cores == 0]
-
-        if not valid_pairs:
-            raise ValueError(
-                f"CPU resource allocation failed with constraints: n_jobs={self.n_jobs}, cv={cv}, n={n}.")
-
-        return max(valid_pairs, key=lambda x: x[1])
+    # def _allocate_cpu_resources(
+    #         self, cv: int, n: int
+    # ) -> Tuple[int, int]:
+    #     """
+    #     Choose the best (ea_cores, cv_cores) pair.
+    #
+    #     Parameters:
+    #     -----------
+    #     :param cv: int
+    #         Number of cross-validation folds.
+    #     :param n: int
+    #         Number of generations in the evolutionary algorithm.
+    #
+    #     Returns:
+    #     --------
+    #     returns: Tuple[int, int]
+    #         The best (ea_cores, cv_cores) pair satisfying the constraints.
+    #     """
+    #     pairs = [(algo_cores, self.n_jobs // algo_cores)
+    #              for algo_cores in range(1, self.n_jobs + 1) if self.n_jobs % algo_cores == 0]
+    #     valid_pairs = [(algo_cores, cv_cores) for algo_cores, cv_cores in pairs if
+    #                    algo_cores <= n and cv_cores <= cv and cv % cv_cores == 0]
+    #
+    #     if not valid_pairs:
+    #         raise ValueError(
+    #             f"CPU resource allocation failed with constraints: n_jobs={self.n_jobs}, cv={cv}, n={n}.")
+    #
+    #     return max(valid_pairs, key=lambda x: x[1])
 
     def _check_estimator_data_requirements(
             self
@@ -522,8 +590,7 @@ class BaseOptimizer(MetaEstimatorMixin, TransformerMixin, BaseEstimator):  # _Ro
             self
     ) -> None:
         """
-        Finalizes the result grid. For the Spatial Algorithm, the height
-        and width of the included area is added.
+        Finalizes the result grid.
 
         Returns:
         --------

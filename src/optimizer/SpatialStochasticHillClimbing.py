@@ -18,7 +18,7 @@ from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 from tqdm import tqdm
 
-from src.optimizer.backend._backend import to_dict_keys, compute_subgrid_dimensions
+from optimizer.backend._backend import to_dict_keys, compute_subgrid_dimensions
 from .Base_Optimizer import BaseOptimizer
 
 

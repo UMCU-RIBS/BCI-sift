@@ -6,7 +6,7 @@ from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 from tqdm import tqdm
 
-from src.optimizer.Base_Optimizer import BaseOptimizer
+from optimizer.Base_Optimizer import BaseOptimizer
 
 
 class RandomSearch(BaseOptimizer):
@@ -68,7 +68,7 @@ class RandomSearch(BaseOptimizer):
 
             # Training Settings
             tol: float = 1e-5,
-            patience: int = 1e5,
+            patience: int = int(1e5),
             bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
             callback: Optional[Union[Callable, Type]] = None,

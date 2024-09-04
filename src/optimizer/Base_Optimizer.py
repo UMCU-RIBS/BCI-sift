@@ -30,8 +30,8 @@ from sklearn.utils._param_validation import (
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
 from sklearn.utils.validation import check_is_fitted
 
-from src.optimizer.backend._backend import FlattenTransformer, SafeVarianceThreshold
-from src.utils.hp_tune import PerfTimer
+from optimizer.backend._backend import FlattenTransformer, SafeVarianceThreshold
+from utils.hp_tune import PerfTimer
 
 matplotlib.use('Agg')  # Use the 'Agg' backend for PNG rendering
 
@@ -167,7 +167,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):  
 
             # Training Settings
             tol: float = 1e-5,
-            patience: int = 1e5,
+            patience: int = int(1e5),
             bounds: Tuple[float, float] = (0.0, 1.0),
             prior: Optional[numpy.ndarray] = None,
             callback: Optional[Callable] = None,
@@ -250,7 +250,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):  
             self.n_cv_ = self.cv
             self.split_ = 1 - self.n_cv_ if self.n_cv_ < 1 else 0.2
         else:
-            self.n_cv_ = self.cv.get_n_splits()
+            self.n_cv_ = self.cv.get_n_splits(groups=self.groups)
             self.split_ = None
 
         if self.estimator_params:

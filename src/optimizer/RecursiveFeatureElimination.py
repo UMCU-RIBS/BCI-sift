@@ -33,11 +33,15 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
     Parameters:
     -----------
-    :param grid: numpy.ndarray
-        The grid structure specifying how channels are arranged.
+    :param dims: Tuple[int, ...]
+        A tuple of dimensions indies tc apply the feature selection onto.
+        Any combination of dimensions can be specified, except for
+        dimension 'zero', which represents the samples.
     :param estimator: Union[BaseEstimator, Pipeline]
         The machine learning estimator or pipeline to evaluate
         channel combinations.
+    :param estimator_params: Optional[Dict[str, any]], default = None
+         Optional parameters to adjust the estimator parameters.
     :param scoring: str, default = 'f1_weighted'
         The metric to optimize, compatible with scikit-learn metrics.
     :param cv: Union[BaseCrossValidator, int], default = 10
@@ -95,8 +99,9 @@ class RecursiveFeatureElimination(BaseOptimizer):
             self,
 
             # General and Decoder
-            grid: numpy.array,
+            dims: Tuple[int, ...],
             estimator: Union[BaseEstimator, Pipeline],
+            estimator_params: Optional[Dict[str, any]] = None,
             scoring: str = 'f1_weighted',
             cv: Union[BaseCrossValidator, int] = 10,
             groups: numpy.ndarray = None,
@@ -111,50 +116,47 @@ class RecursiveFeatureElimination(BaseOptimizer):
             n_jobs: int = 1,
             random_state: Optional[int] = None,
             verbose: Union[bool, int] = False,
-            **estimator_params: Dict[str, Any]
     ) -> None:
 
-        super().__init__(grid, estimator, scoring, cv, groups, n_jobs, random_state, verbose, **estimator_params)
+        super().__init__(dims, estimator, estimator_params, scoring, cv, groups, n_jobs, random_state, verbose)
 
         # Recursive Feature Elimination Settings
         self.feature_retention_ratio = feature_retention_ratio
         self.step = step
         self.importance_getter = importance_getter
 
-    def fit(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> Type['RecursiveFeatureElimination']:
-        """
-        Fit method optimizes the channel combination with
-        Recursive Feature Elimination.
+   # def fit(
+   #         self, X: numpy.ndarray, y: numpy.ndarray = None
+    # ) -> Type['RecursiveFeatureElimination']:
+    #     """
+    #     Fit method optimizes the channel combination with
+    #     Recursive Feature Elimination.
 
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
+    #     Parameters:
+    #     -----------
+    #     :param X: numpy.ndarray
+    #         Array-like with dimensions [samples, channel_height, channel_width, time]
+    #     :param y: numpy.ndarray, default = None
+    #         Array-like with dimensions [targets].
 
-        Return:
-        -----------
-        :return: Type['RecursiveFeatureElimination']
-        """
-        self.X_, self.y_ = self._validate_data(
-            X, y, reset=False, **{'ensure_2d': False, 'allow_nd': True}
-        )
+    #     Return:
+    #     -----------
+    #     :return: Type['RecursiveFeatureElimination']
+    #     """
+    #     self.X_, self.y_ = self._validate_data(
+    #         X, y, reset=False, **{'ensure_2d': False, 'allow_nd': True}
+    #     )
 
-        self.iter_ = int(0)
-        self.result_grid_ = []
-        self.ranks_ = []
+    #     self.iter_ = int(0)
+    #     self.result_grid_ = []
+    #     self.ranks_ = []
 
-        self._set_estimator_params()
+    #     self.solution_, self.mask_, self.score_ = self._run()
 
-        self.solution_, self.mask_, self.score_ = self._run()
+    #     # Conclude the result grid
+    #     self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
 
-        # Conclude the result grid
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
-
-        return self
+    #     return self
 
     def _objective_function(
             self, mask: numpy.ndarray
@@ -176,7 +178,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         X_sub = self.X_[:, mask].reshape(self.X_.shape[0], -1)
 
         scores = self._evaluate_candidates(X_sub)
-        self._save_statistics(copy(mask).reshape(self.grid.shape), scores)
+        self._save_statistics(copy(mask).reshape(self.dim_size_), scores)
 
         return scores.mean()
 
@@ -216,12 +218,24 @@ class RecursiveFeatureElimination(BaseOptimizer):
             getter = attrgetter(self.importance_getter)
             coefs = []
             for est in res_ests:
-                coefs.append(getter(est))
+                coefs.append(getter(est[-1]))
             coefs = np.stack(coefs).reshape((len(res_ests), coefs[0].shape[0], -1, self.X_.shape[3]))
             self.ranks_ = np.argsort(np.mean(coefs ** 2, axis=(0, 1, 3)))
             scores = results['test_score']
 
         return scores
+    #TODO: ask Dirk how to implement this
+    def _handle_bounds(self):
+        """Method to handle bounds for feature selection."""
+        return self.bounds
+    
+    #TODO: ask Dirk how to implement this
+    def _handle_prior(self):
+        """Initialize the feature mask with the prior if provided."""
+        if self.prior is not None:
+            return self.prior
+        else:
+            return None
 
     def transform(
             self, X: numpy.ndarray, y: numpy.ndarray = None
@@ -263,7 +277,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
             A tuple with the solution, mask, the evaluation scores and the optimization history.
         """
-        mask = np.ones_like(self.grid, dtype=bool)  # TODO: exclude bad channels here
+        mask = np.ones(self.dim_size_,dtype=bool)  # TODO: exclude bad channels here (_handle_prior?)
         best_score = 0.0
         best_mask = None
 

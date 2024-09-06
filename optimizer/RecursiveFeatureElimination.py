@@ -9,11 +9,10 @@
 
 from copy import copy
 from operator import attrgetter
-from typing import Tuple, Union, Dict, Any, Optional, Type
+from typing import Tuple, Union, Dict, Optional
 
 import numpy
 import numpy as np
-import pandas as pd
 from sklearn.base import BaseEstimator
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import BaseCrossValidator
@@ -96,37 +95,43 @@ class RecursiveFeatureElimination(BaseOptimizer):
     """
 
     def __init__(
-            self,
-
-            # General and Decoder
-            dims: Tuple[int, ...],
-            estimator: Union[BaseEstimator, Pipeline],
-            estimator_params: Optional[Dict[str, any]] = None,
-            scoring: str = 'f1_weighted',
-            cv: Union[BaseCrossValidator, int] = 10,
-            groups: numpy.ndarray = None,
-
-            # Recursive Feature Elimination Settings
-
-            feature_retention_ratio: Union[str, float] = "auto",
-            step: int = 1,
-            importance_getter: str = "named_steps.svc.coef_",
-
-            # Misc
-            n_jobs: int = 1,
-            random_state: Optional[int] = None,
-            verbose: Union[bool, int] = False,
+        self,
+        # General and Decoder
+        dims: Tuple[int, ...],
+        estimator: Union[BaseEstimator, Pipeline],
+        estimator_params: Optional[Dict[str, any]] = None,
+        scoring: str = "f1_weighted",
+        cv: Union[BaseCrossValidator, int] = 10,
+        groups: numpy.ndarray = None,
+        # Recursive Feature Elimination Settings
+        feature_retention_ratio: Union[str, float] = "auto",
+        step: int = 1,
+        importance_getter: str = "named_steps.svc.coef_",
+        # Misc
+        n_jobs: int = 1,
+        random_state: Optional[int] = None,
+        verbose: Union[bool, int] = False,
     ) -> None:
 
-        super().__init__(dims, estimator, estimator_params, scoring, cv, groups, n_jobs, random_state, verbose)
+        super().__init__(
+            dims,
+            estimator,
+            estimator_params,
+            scoring,
+            cv,
+            groups,
+            n_jobs,
+            random_state,
+            verbose,
+        )
 
         # Recursive Feature Elimination Settings
         self.feature_retention_ratio = feature_retention_ratio
         self.step = step
         self.importance_getter = importance_getter
 
-   # def fit(
-   #         self, X: numpy.ndarray, y: numpy.ndarray = None
+    # def fit(
+    #         self, X: numpy.ndarray, y: numpy.ndarray = None
     # ) -> Type['RecursiveFeatureElimination']:
     #     """
     #     Fit method optimizes the channel combination with
@@ -158,9 +163,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
     #     return self
 
-    def _objective_function(
-            self, mask: numpy.ndarray
-    ) -> float:
+    def _objective_function(self, mask: numpy.ndarray) -> float:
         """
         Objective function that calculates the score to maximize/minimize.
 
@@ -182,9 +185,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
         return scores.mean()
 
-    def _evaluate_candidates(
-            self, selected_features: numpy.ndarray
-    ) -> numpy.ndarray:
+    def _evaluate_candidates(self, selected_features: numpy.ndarray) -> numpy.ndarray:
         """
         Evaluate the given features using cross-validation or train-test split.
 
@@ -200,36 +201,53 @@ class RecursiveFeatureElimination(BaseOptimizer):
         """
         if self.cv == 1:
             # Use train-test split instead of cross-validation
-            X_train, X_test, y_train, y_test = train_test_split(selected_features, self.y_, test_size=0.2,
-                                                                random_state=self.random_state)
+            X_train, X_test, y_train, y_test = train_test_split(
+                selected_features,
+                self.y_,
+                test_size=0.2,
+                random_state=self.random_state,
+            )
             self.estimator.fit(X_train, y_train)
             scorer = get_scorer(self.scoring)
             # get feature weights
             getter = attrgetter(self.importance_getter)
-            coefs = getter(self.estimator).reshape((getter(self.estimator).shape[0], -1, self.X_.shape[3]))
-            self.ranks_ = np.argsort(np.mean(coefs ** 2, axis=(0, 2)))
+            coefs = getter(self.estimator).reshape(
+                (getter(self.estimator).shape[0], -1, self.X_.shape[3])
+            )
+            self.ranks_ = np.argsort(np.mean(coefs**2, axis=(0, 2)))
             scores = scorer(self.estimator, X_test, y_test)
 
         else:
             # Use cross-validation
-            results = cross_validate(self.estimator, selected_features, self.y_, scoring=get_scorer(self.scoring),
-                                     cv=self.cv, groups=self.groups, n_jobs=self.n_jobs, return_estimator=True)
-            res_ests = results['estimator']
+            results = cross_validate(
+                self.estimator,
+                selected_features,
+                self.y_,
+                scoring=get_scorer(self.scoring),
+                cv=self.cv,
+                groups=self.groups,
+                n_jobs=self.n_jobs,
+                return_estimator=True,
+            )
+            res_ests = results["estimator"]
             getter = attrgetter(self.importance_getter)
             coefs = []
             for est in res_ests:
                 coefs.append(getter(est[-1]))
-            coefs = np.stack(coefs).reshape((len(res_ests), coefs[0].shape[0], -1, self.X_.shape[3]))
-            self.ranks_ = np.argsort(np.mean(coefs ** 2, axis=(0, 1, 3)))
-            scores = results['test_score']
+            coefs = np.stack(coefs).reshape(
+                (len(res_ests), coefs[0].shape[0], -1, self.X_.shape[3])
+            )
+            self.ranks_ = np.argsort(np.mean(coefs**2, axis=(0, 1, 3)))
+            scores = results["test_score"]
 
         return scores
-    #TODO: ask Dirk how to implement this
+
+    # TODO: ask Dirk how to implement this
     def _handle_bounds(self):
         """Method to handle bounds for feature selection."""
         return self.bounds
-    
-    #TODO: ask Dirk how to implement this
+
+    # TODO: ask Dirk how to implement this
     def _handle_prior(self):
         """Initialize the feature mask with the prior if provided."""
         if self.prior is not None:
@@ -237,9 +255,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         else:
             return None
 
-    def transform(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> numpy.ndarray:
+    def transform(self, X: numpy.ndarray, y: numpy.ndarray = None) -> numpy.ndarray:
         """
         Transforms the input with the mask obtained from
         the solution of Recursive Feature Elimination
@@ -261,9 +277,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
         return X[:, self.mask_, :]
 
-    def _run(
-            self
-    ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
+    def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
         Executes the Recursive Feature Elimination
 
@@ -277,7 +291,9 @@ class RecursiveFeatureElimination(BaseOptimizer):
         :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
             A tuple with the solution, mask, the evaluation scores and the optimization history.
         """
-        mask = np.ones(self.dim_size_,dtype=bool)  # TODO: exclude bad channels here (_handle_prior?)
+        mask = np.ones(
+            self.dim_size_, dtype=bool
+        )  # TODO: exclude bad channels here (_handle_prior?)
         best_score = 0.0
         best_mask = None
 
@@ -289,7 +305,11 @@ class RecursiveFeatureElimination(BaseOptimizer):
         support_ = np.ones(shape=np.sum(mask), dtype=bool)
         pbar = range(int((np.sum(mask) - self.n_target_features) / self.step + 1))
         if self.verbose:
-            pbar = tqdm(pbar, desc="Recursive Feature Elimination", postfix={'best score': f'{best_score:.6f}'})
+            pbar = tqdm(
+                pbar,
+                desc="Recursive Feature Elimination",
+                postfix={"best score": f"{best_score:.6f}"},
+            )
         for _ in pbar:
             features = np.arange(support_.size)[support_]
             score = self._objective_function(mask)
@@ -300,11 +320,13 @@ class RecursiveFeatureElimination(BaseOptimizer):
             # remove least important features from result
             support_[features[self.ranks_][:threshold]] = False
             mask = support_.reshape(mask.shape)
-            if score >= best_score:  # now: best mask is minimum # of electrodes with best score
+            if (
+                score >= best_score
+            ):  # now: best mask is minimum # of electrodes with best score
                 best_score = score
                 best_mask = copy(mask)
             if self.verbose:
-                pbar.set_postfix({'score': f"{best_score:.6f}"})
+                pbar.set_postfix({"score": f"{best_score:.6f}"})
 
         solution = mask.reshape(-1).astype(float)
         best_score = best_score * 100

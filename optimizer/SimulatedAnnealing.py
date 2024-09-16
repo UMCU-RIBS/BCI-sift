@@ -86,7 +86,7 @@ class SimulatedAnnealing(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: Tuple[int, ...]
+    :param dimensions: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for dimension
         'zero', which represents the samples.
@@ -103,6 +103,14 @@ class SimulatedAnnealing(BaseOptimizer):
         training samples for the train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
         Groups for a LeaveOneGroupOut generator.
+    :param strategy: str, default = "conditional"
+        The strategy of optimization to apply. Valid options are: 'joint' and
+        'conditional'.
+        * Joint Optimization: Optimizes all features simultaneously. Should be only
+          selected for small search spaces.
+        * Conditional Optimization: Optimizes each feature dimension iteratively,
+          building on previous results. Generally, yields better performance for large
+          search spaces.
     :param n_iter: int, default = 1000
         The number of iterations for the simulated annealing process.
     :param optimizer_method: str, default = 'L-BFGS-B'
@@ -233,12 +241,13 @@ class SimulatedAnnealing(BaseOptimizer):
     def __init__(
         self,
         # General and Decoder
-        dims: Tuple[int, ...],
+        dimensions: Tuple[int, ...],
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
         cv: Union[BaseCrossValidator, int, float] = 10,
         groups: Optional[numpy.ndarray] = None,
+        strategy: str = "conditional",
         # Simulated Annealing Settings
         n_iter: int = 1000,
         optimizer_method: str = "L-BFGS-B",
@@ -255,18 +264,19 @@ class SimulatedAnnealing(BaseOptimizer):
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Callable] = None,
         # Misc
-        n_jobs: int = 1,
+        n_jobs: int = -1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
 
         super().__init__(
-            dims,
+            dimensions,
             estimator,
             estimator_params,
             scoring,
             cv,
             groups,
+            strategy,
             tol,
             patience,
             bounds,

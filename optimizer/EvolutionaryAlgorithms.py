@@ -80,7 +80,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: Tuple[int, ...]
+    :param dimensions: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
@@ -97,6 +97,14 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
         Groups for a LeaveOneGroupOut generator.
+    :param strategy: str, default = "conditional"
+        The strategy of optimization to apply. Valid options are: 'joint' and
+        'conditional'.
+        * Joint Optimization: Optimizes all features simultaneously. Should be only
+          selected for small search spaces.
+        * Conditional Optimization: Optimizes each feature dimension iteratively,
+          building on previous results. Generally, yields better performance for large
+          search spaces.
     :param population_size: int, default = 120
         The size of the population in each generation.
     :param n_gen: int, default = 100
@@ -266,12 +274,13 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     def __init__(
         self,
         # General and Decoder
-        dims: Tuple[int, ...],
+        dimensions: Tuple[int, ...],
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
         cv: Union[BaseCrossValidator, int, float] = 10,
         groups: Optional[numpy.ndarray] = None,
+        strategy: str = "conditional",
         # Genetic Algorithm Settings
         population_size: int = 120,
         n_gen: int = 100,
@@ -304,18 +313,19 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Union[Callable, Type]] = None,
         # Misc
-        n_jobs: int = 1,
+        n_jobs: int = -1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
 
         super().__init__(
-            dims,
+            dimensions,
             estimator,
             estimator_params,
             scoring,
             cv,
             groups,
+            strategy,
             tol,
             patience,
             bounds,
@@ -365,7 +375,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             The best found solution, mask, and their fitness score.
         """
         # Set up EA algorithm
-        toolbox = self._init_toolbox()
+        toolbox, pool = self._init_toolbox()
         populations = self._initialize_population(toolbox)
         method, method_params = self._init_method()
 
@@ -381,15 +391,15 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         )
         best_score, wait = 0.0, 0
 
+        # Run the search loop
+        idtr = f"{self.dims_incl_}: " if isinstance(self.dims_incl_, int) else ""
         progress_bar = tqdm(
             range(self.n_gen),
-            desc=self.__class__.__name__,
+            desc=f"{idtr}{self.__class__.__name__}",
             postfix=f"{best_score:.6f}",
             disable=not self.verbose,
             leave=True,
         )
-
-        # Run the search loop
         for self.iter_ in progress_bar:
             for i, island in enumerate(populations):
                 # Optimize Feature Selection
@@ -434,6 +444,9 @@ class EvolutionaryAlgorithms(BaseOptimizer):
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )
                     break
+        # Close Pool of Processes
+        if self.n_jobs > 1:
+            pool.close()
 
         # Obtain the final best_cost and the final best_position
         best_solution = numpy.array(hof.items)
@@ -680,8 +693,9 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         # Step 1: Initialize the toolbox
         toolbox = base.Toolbox()
 
+        pool = None
         if self.n_jobs > 1:
-            pool = multiprocessing.Pool()
+            pool = multiprocessing.Pool(self.n_jobs)
             toolbox.register("map", pool.map)
 
         def create_individual(n):
@@ -723,4 +737,4 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         ),
                          )
         # fmt: on
-        return toolbox
+        return toolbox, pool

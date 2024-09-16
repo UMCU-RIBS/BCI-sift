@@ -27,7 +27,7 @@ class PerturbativeSearch(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: Tuple[int, ...]
+    :param dimensions: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
@@ -44,6 +44,14 @@ class PerturbativeSearch(BaseOptimizer):
         train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
         Groups for a LeaveOneGroupOut generator.
+    :param strategy: str, default = "conditional"
+        The strategy of optimization to apply. Valid options are: 'joint' and
+        'conditional'.
+        * Joint Optimization: Optimizes all features simultaneously. Should be only
+          selected for small search spaces.
+        * Conditional Optimization: Optimizes each feature dimension iteratively,
+          building on previous results. Generally, yields better performance for large
+          search spaces.
     :param n_iter: int, default = 100
         The number of iterations for the rand search process.
     :param n_perturbations : int, default = 30
@@ -103,12 +111,13 @@ class PerturbativeSearch(BaseOptimizer):
     def __init__(
         self,
         # General and Decoder
-        dims: Tuple[int, ...],
+        dimensions: Tuple[int, ...],
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
         cv: Union[BaseCrossValidator, int, float] = 10,
         groups: Optional[numpy.ndarray] = None,
+        strategy: str = "conditional",
         # Random Search Settings
         n_iter: int = 100,
         n_perturbations: int = 20,
@@ -119,18 +128,19 @@ class PerturbativeSearch(BaseOptimizer):
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Callable] = None,
         # Misc
-        n_jobs: int = 1,
+        n_jobs: int = -1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
 
         super().__init__(
-            dims,
+            dimensions,
             estimator,
             estimator_params,
             scoring,
             cv,
             groups,
+            strategy,
             tol,
             patience,
             bounds,
@@ -164,9 +174,10 @@ class PerturbativeSearch(BaseOptimizer):
         pool = None if self.n_jobs == 1 else multiprocessing.Pool(self.n_jobs)
 
         # Run search
+        idtr = f"{self.dims_incl_}: " if isinstance(self.dims_incl_, int) else ""
         progress_bar = tqdm(
             range(self.n_iter),
-            desc=self.__class__.__name__,
+            desc=f"{idtr}{self.__class__.__name__}",
             postfix=f"{best_score:.6f}",
             disable=not self.verbose,
             leave=True,
@@ -202,6 +213,10 @@ class PerturbativeSearch(BaseOptimizer):
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )
                     break
+
+        # Close Pool of Processes
+        if self.n_jobs > 1:
+            pool.close()
 
         best_solution = best_state
         best_state = best_state > 0.5

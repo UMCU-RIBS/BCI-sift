@@ -79,7 +79,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: Tuple[int, ...]
+    :param dimensions: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
@@ -96,8 +96,16 @@ class ParticleSwarmOptimization(BaseOptimizer):
         train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
         Groups for a LeaveOneGroupOut generator.
+    :param strategy: str, default = "conditional"
+        The strategy of optimization to apply. Valid options are: 'joint' and
+        'conditional'.
+        * Joint Optimization: Optimizes all features simultaneously. Should be only
+          selected for small search spaces.
+        * Conditional Optimization: Optimizes each feature dimension iteratively,
+          building on previous results. Generally, yields better performance for large
+          search spaces.
     :param topology: str, default = 'global'
-        alid ovptions are 'global and 'local'.
+        Valid ovptions are 'global and 'local'.
             * Global: Uses a star-topology, where every particle compares itself with
               the best-performing particle in the swarm, whereas
             * 'Local': Uses a ring topology, where every particle compares itself only
@@ -257,12 +265,13 @@ class ParticleSwarmOptimization(BaseOptimizer):
     def __init__(
         self,
         # General and Decoder
-        dims: Tuple[int, ...],
+        dimensions: Tuple[int, ...],
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
         cv: Union[BaseCrossValidator, int, float] = 10,
         groups: Optional[numpy.ndarray] = None,
+        strategy: str = "conditional",
         # Particle Swarm Optimization Settings
         topology: str = "global",
         n_particles: int = 80,
@@ -285,18 +294,19 @@ class ParticleSwarmOptimization(BaseOptimizer):
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Callable] = None,
         # Misc
-        n_jobs: int = 1,
+        n_jobs: int = -1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
 
         super().__init__(
-            dims,
+            dimensions,
             estimator,
             estimator_params,
             scoring,
             cv,
             groups,
+            strategy,
             tol,
             patience,
             bounds,
@@ -371,9 +381,10 @@ class ParticleSwarmOptimization(BaseOptimizer):
         ftol_history = deque(maxlen=self.patience)
 
         # Run the search loop
+        idtr = f"{self.dims_incl_}: " if isinstance(self.dims_incl_, int) else ""
         progress_bar = tqdm(
             range(self.n_iter),
-            desc=self.__class__.__name__,
+            desc=f"{idtr}{self.__class__.__name__}",
             postfix=f"{-swarm.best_cost:.6f}",
             disable=not self.verbose,
             leave=True,
@@ -432,7 +443,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
             swarm.position = top.compute_position(swarm, self.bounds_, bh)
 
         # Close Pool of Processes
-        if self.n_jobs != 1:
+        if self.n_jobs > 1:
             pool.close()
 
         # Obtain the final best_solution, best_state and best_score

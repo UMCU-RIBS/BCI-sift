@@ -35,7 +35,11 @@ from sklearn.utils._param_validation import (
 )
 from sklearn.utils.validation import check_is_fitted
 
-from optimizer.backend._backend import FlattenTransformer, SafeVarianceThreshold
+from optimizer.backend._backend import (
+    FlattenTransformer,
+    SafeVarianceThreshold,
+    to_string,
+)
 from utils.hp_tune import PerfTimer
 
 __all__ = []
@@ -52,7 +56,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
 
     Parameters:
     -----------
-    :param dims: Tuple[int, ...]
+    :param dimensions: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
@@ -69,6 +73,14 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
         Groups for a LeaveOneGroupOut generator.
+    :param strategy: str, default = "conditional"
+        The strategy of optimization to apply. Valid options are: 'joint' and
+        'conditional'.
+        * Joint Optimization: Optimizes all features simultaneously. Should be only
+          selected for small search spaces.
+        * Conditional Optimization: Optimizes each feature dimension iteratively,
+          building on previous results. Generally, yields better performance for large
+          search spaces.
     :param patience: int, default = int(1e5)
         The number of iterations for which the objective function improvement must be
         below tol to stop optimization.
@@ -125,6 +137,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             Interval(Real, 0, 1, closed="both"),
         ],
         "groups": [numpy.ndarray, None],
+        "strategy": [StrOptions({"joint", "conditional"})],
         "tol": [Interval(Real, 0, None, closed="left")],
         "patience": [Interval(Integral, 0, None, closed="left")],
         "bounds": [tuple],
@@ -138,12 +151,13 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
     def __init__(
         self,
         # General and Decoder
-        dims: Tuple[int, ...],
+        dimensions: Tuple[int, ...],
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
         cv: Union[BaseCrossValidator, int, float] = 10,
         groups: Optional[numpy.ndarray] = None,
+        strategy: str = "conditional",
         # Training Settings
         tol: float = 1e-5,
         patience: int = int(1e5),
@@ -151,18 +165,19 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Callable] = None,
         # Misc
-        n_jobs: int = 1,
+        n_jobs: int = -1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
 
         # General and Decoder
-        self.dims = dims
+        self.dimensions = dimensions
         self.estimator = estimator
         self.estimator_params = estimator_params
         self.scoring = scoring
         self.cv = cv
         self.groups = groups
+        self.strategy = strategy
         # Training Settings
         self.tol = tol
         self.patience = patience
@@ -189,7 +204,6 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         if hasattr(self, "X_"):
             del self.X_
             del self.y_
-            del self.iter_
             del self.result_grid_
             del self.n_cv_
             del self.dims_incl_
@@ -225,6 +239,17 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             X, y, reset=False, ensure_2d=False, allow_nd=True
         )
         del X, y
+        if max(self.dimensions) > self.X_.ndim:
+            raise ValueError(
+                f"dims cannot exceed the dimensions of the data. Got {self.dimensions}"
+            )
+        if self.n_jobs == 1:
+            raise ValueError(
+                f"n_jobs = 1, assumes no test set data. if n_jobs < 1, a train-test "
+                f"split of the ratio specified by n_jobs is used. "
+            )
+        random.seed(self.random_state)
+        numpy.random.seed(self.random_state)
 
         if isinstance(self.cv, int):
             self.n_cv_ = self.cv
@@ -237,24 +262,26 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             self._set_estimator_params()
         self._check_estimator_data_requirements()
 
-        random.seed(self.random_state)
-        numpy.random.seed(self.random_state)
-
         self.result_grid_ = []
         if self.n_jobs > 1:
             manager = multiprocessing.Manager()
             self.result_grid_ = manager.list()
 
-        self.iter_ = 0
-        self.dims_incl_ = sorted(self.dims)
-        self.dim_size_ = tuple(numpy.array(self.X_.shape)[list(self.dims)])
-        self.slices_ = tuple(
-            [
-                numpy.newaxis if dim not in self.dims_incl_ else slice(None)
-                for dim in range(self.X_.ndim)
-            ]
+        return (
+            self.fit_joint()
+            if self.strategy == "joint"
+            else self.fit_conditional(self.X_)
         )
-        # self.algo_cores_, self.cv_cores_ = 0, self.n_jobs
+
+    def fit_joint(self) -> None:
+        """Fit the model using the joint optimization strategy."""
+        self.dims_incl_ = sorted(self.dimensions)
+        self.dim_size_ = tuple(numpy.array(self.X_.shape)[list(self.dims_incl_)])
+        self.slices_ = tuple(
+            numpy.newaxis if d not in self.dims_incl_ else slice(None)
+            for d in range(self.X_.ndim)
+        )
+
         self.bounds_ = self._handle_bounds()
         self.prior_ = self._handle_prior()
 
@@ -262,6 +289,32 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         self.mask_ = self._prepare_mask(self.state_.reshape(self.dim_size_))
 
         self._prepare_result_grid()
+        return self
+
+    def fit_conditional(self, X: numpy.ndarray) -> None:
+        """Fit the model using the conditional optimization strategy."""
+        self.mask_ = numpy.full(self.X_.shape, fill_value=True)
+        self.solution_, self.state_, self.score_ = [], [], []
+
+        for idx, self.dims_incl_ in enumerate(self.dimensions):
+            self.dim_size_ = numpy.array(self.X_.shape)[self.dims_incl_]
+            self.slices_ = tuple(
+                numpy.newaxis if d != self.dims_incl_ else slice(None)
+                for d in range(self.X_.ndim)
+            )
+
+            self.bounds_ = self._handle_bounds()
+            self.prior_ = self._handle_prior()
+
+            solution, state, score = self._run()
+
+            self.solution_.append(solution)
+            self.state_.append(state)
+            self.score_.append(score)
+            self.mask_ *= self._prepare_mask(state.reshape(self.dim_size_))
+            self.X_ = self.transform(X)
+
+            self._prepare_result_grid()
         return self
 
     def transform(
@@ -439,6 +492,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         diagnostics = {
             "Method": self.__class__.__name__,
             "Iteration": self.iter_,
+            "Dimensions": to_string(self.dims_incl_),
             "Mask": [mask.reshape(self.dim_size_)],
             "Size": numpy.sum(mask),
             "Metric": self.scoring,
@@ -594,7 +648,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         :returns: None
         """
         try:
-            self.estimator.fit(self.X_[0], self.y_[0])
+            self._validate_data(self.X_)
         except ValueError as e:
             cases = [
                 "2D",
@@ -609,18 +663,19 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             ]
             if any(term in str(e).lower() for term in cases):
                 try:
-                    test_estimator = Pipeline(
+                    dim_comp = Pipeline(
                         [
                             ("flatten", FlattenTransformer()),
                             ("clean", SafeVarianceThreshold(threshold=0.0)),
-                            ("estimator", self.estimator),
                         ]
                     )
-                    test_estimator.fit(self.X_[:2], self.y_[:2])
+                    self._validate_data(dim_comp.fit_transform(self.X_), self.y_)
                     warnings.warn(
                         f"Estimator adjusted for ND data compatibility.", UserWarning
                     )
-                    self.estimator = test_estimator
+                    self.estimator = Pipeline(
+                        [("compatibility", dim_comp), ("estimator", self.estimator)]
+                    )
                 except e as e:
                     raise e
 

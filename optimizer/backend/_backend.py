@@ -41,15 +41,12 @@ class SimulatedAnnealingReporter:
     :return: None
     """
 
-    def __init__(
-            self,
-            verbose: bool = False
-    ) -> None:
+    def __init__(self, verbose: bool = False) -> None:
         self.verbose = verbose
         self.iteration = 1
 
     def __call__(
-            self, x: numpy.ndarray, f: float, context: Dict[str, Any]
+        self, x: numpy.ndarray, f: float, context: Dict[str, Any]
     ) -> Union[bool, None]:
         """
         Invoked during each iteration of the optimization process. Logs performance
@@ -73,13 +70,16 @@ class SimulatedAnnealingReporter:
 
         if -f >= 1.0:
             if self.verbose:
-                print(f"Local Minimum {self.iteration} detected: Performance Metric = {np.round(-f, 4)}")
+                print(
+                    f"Local Minimum {self.iteration} detected: Performance Metric = {np.round(-f, 4)}"
+                )
                 print(f"Reached maximum performance")
             return True
 
         if self.verbose:
             print(
-                f"Local Minimum {self.iteration} detected: Performance Metric = {np.round(-f, 4)}")
+                f"Local Minimum {self.iteration} detected: Performance Metric = {np.round(-f, 4)}"
+            )
         self.iteration += 1
 
 
@@ -104,11 +104,9 @@ def pso_maxp_stopper(x, f):
     return True  # Continue optimization
 
 
-def to_dict_keys(
-        arr: numpy.ndarray
-) -> str:
+def to_string(value: Union[list, int, float, bool]) -> str:
     """
-    Convert a list of integers to a dictionary key string, with integers
+    Convert a list or integers, floats and bools to a string, with integers
     sorted and joined by dashes.
 
     Parameters:
@@ -122,12 +120,32 @@ def to_dict_keys(
         A string representation of the list, sorted and joined by dashes,
         suitable for use as a dictionary key.
     """
-    return '-'.join(map(str, sorted(arr)))
+    return "-".join(map(str, value)) if isinstance(value, list) else str(value)
 
 
-def channel_id_to_int(
-        l: List[str]
-) -> List[int]:
+def to_str(value: Union[list, numpy.ndarray, int, float, bool]) -> str:
+    """
+    Convert a list of integers to strings, with integers sorted and joined by dashes.
+
+    Parameters:
+    -----------
+    :param value: Union[list, numpy.ndarray, int, float, bool]
+        A list, or ndarray or primitives.
+
+    Return:
+    -------
+    :return: str
+        A string representation of the list, numpy array or primitives, sorted and
+        joined by dashes, suitable for use as a dictionary key.
+    """
+    return (
+        "-".join(map(str, value))
+        if isinstance(value, (list, numpy.ndarray))
+        else str(value)
+    )
+
+
+def channel_id_to_int(l: List[str]) -> List[int]:
     """
     Convert a list of strings to integers.
 
@@ -141,12 +159,10 @@ def channel_id_to_int(
     :return: List[int]
         A list of integer representing channel IDs.
     """
-    return [int(re.search(r'\d+', s).group()) for s in l if re.search(r'\d+', s)]
+    return [int(re.search(r"\d+", s).group()) for s in l if re.search(r"\d+", s)]
 
 
-def grid_to_channel_id(
-        grid: List[List[Any]]
-) -> Dict[Any, Tuple[int, int]]:
+def grid_to_channel_id(grid: List[List[Any]]) -> Dict[Any, Tuple[int, int]]:
     """
     Maps each value in a 2D grid to its corresponding (row, column) indices.
 
@@ -174,9 +190,7 @@ def grid_to_channel_id(
     return {val: (i, j) for i, row in enumerate(grid) for j, val in enumerate(row)}
 
 
-def compute_subgrid_dimensions(
-        mask: numpy.ndarray
-) -> Tuple[int, int]:
+def compute_subgrid_dimensions(mask: numpy.ndarray) -> Tuple[int, int]:
     """
     Calculates the height and width of the smallest rectangle that encompasses
     all the True values within a 2D mask.
@@ -213,7 +227,9 @@ def compute_subgrid_dimensions(
 
     # Check if the mask is 2D and handle accordingly
     if true_indices.shape[1] < 2:
-        raise ValueError("The mask is not a 2D array or does not contain valid True values.")
+        raise ValueError(
+            "The mask is not a 2D array or does not contain valid True values."
+        )
 
     min_row_idx, max_row_idx = true_indices[:, 0].min(), true_indices[:, 0].max()
     min_col_idx, max_col_idx = true_indices[:, 1].min(), true_indices[:, 1].max()

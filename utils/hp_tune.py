@@ -24,17 +24,15 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.pipeline import Pipeline
 
 if False:  # torch.cuda.is_available(): # False: #
-    device = 'cuda'
-    from cuml.model_selection import StratifiedKFold
+    device = "cuda"
 else:
-    device = 'cpu'
-    from sklearn.model_selection import StratifiedKFold
+    device = "cpu"
 
 warnings.filterwarnings("ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
-os.environ['RAY_AIR_NEW_OUTPUT'] = '1'
+os.environ["RAY_AIR_NEW_OUTPUT"] = "1"
 
 trial_num = 0
 
@@ -64,7 +62,7 @@ class PerfTimer:
         self.start: float = 0.0
         self.duration: float = 0.0
 
-    def __enter__(self) -> 'PerfTimer':
+    def __enter__(self) -> "PerfTimer":
         self.start = time.perf_counter()
         return self
 
@@ -72,22 +70,41 @@ class PerfTimer:
         self.duration = time.perf_counter() - self.start
 
 
-def train(config: Dict[str, Any], object_store_ref: Dict[str, ray.ObjectRef]):
-    fs_transformer = ray.get(object_store_ref['estimator'])
-    X, y = ray.get(object_store_ref['data'])
+def train(
+    config: Dict[str, Any],
+    warm_restarts: bool,
+    object_store_ref: Dict[str, ray.ObjectRef],
+):
+    fs_transformer = ray.get(object_store_ref["estimator"])
+    X, y = ray.get(object_store_ref["data"])
+    hall_of_fame = ray.get(object_store_ref["hall_of_fame"])
 
     estimator_params = {param: config[param] for param in config}
-    estimator_params['callback'] = lambda x, score, context: tune.report(
-        {'iteration': context['Iteration'],
-         "Score": score,
-         "train_time": context['Train Time'],
-         "infer_time": context['Infer Time'],
-         "is_bad": not math.isfinite(score),
-         "should_checkpoint": False,
-         })
+    estimator_params["callback"] = lambda x, score, context: tune.report(
+        {
+            "iteration": context["Iteration"],
+            "Score": score,
+            "train_time": context["Train Time"],
+            "infer_time": context["Infer Time"],
+            "is_bad": not math.isfinite(score),
+            "should_checkpoint": False,
+        }
+    )
+    if warm_restarts and hall_of_fame:
+        hall_of_fame = ray.get(object_store_ref["hall_of_fame"])
+        prior = hall_of_fame[max(hall_of_fame.keys())]
+        estimator_params["prior"] = prior
 
     fs_transformer = fs_transformer.set_params(**estimator_params)
     fs_transformer.fit(X, y)
+
+    if warm_restarts:
+        results = fs_transformer.result_grid_
+        max_score_index = results["Score"].idxmax()
+        hall_of_fame[results.loc[max_score_index, "Score"]] = results.loc[
+            max_score_index, "Mask"
+        ]
+        ray.put({"hall_of_fame": hall_of_fame})
 
 
 #
@@ -207,36 +224,40 @@ class DecoderOptimization:
     """
 
     def __init__(
-            self,
-            estimator: Union[BaseEstimator, Pipeline],
-            param_dist: Dict[str, Any],
-            out_path: str,
-            exp_name: str,
-            num_samples: int = 10,
-            metric: str = 'f1_weighted',
-            fold_generator: Any = StratifiedKFold(n_splits=10),
-            max_concurrent: int = 10,
-            search_scheduler: str = 'AsyncHyperBand',
-            search_optimizer: str = 'HEBO',
-            device='cpu',
+        self,
+        estimator: Union[BaseEstimator, Pipeline],
+        param_dist: Dict[str, Any],
+        max_iter: int,
+        out_path: str,
+        exp_name: str,
+        num_samples: int = 10,
+        metric: str = "f1_weighted",
+        max_concurrent: int = 10,
+        search_scheduler: str = "AsyncHyperBand",
+        search_optimizer: str = "HEBO",
+        warm_restarts: bool = True,
+        device: str = "cpu",
     ) -> None:
         self.estimator = estimator
         self.param_dist = param_dist
+        self.max_iter = max_iter
         self.out_path = out_path
 
-        self.fold_generator = fold_generator
         self.max_concurrent = max_concurrent
         self.num_samples = num_samples
         self.metric = metric
 
         self.search_scheduler = search_scheduler
         self.search_optimizer = search_optimizer
+        self.warm_restarts = warm_restarts
         self.device = device
 
         self.exp_name = exp_name
-        self.name = estimator[-1].__class__.__name__ if isinstance(estimator, Pipeline) \
+        self.name = (
+            estimator[-1].__class__.__name__
+            if isinstance(estimator, Pipeline)
             else estimator.__class__.__name__
-        self.num_cv = fold_generator.n_splits
+        )
 
         self.diagnostics = None
 
@@ -252,43 +273,53 @@ class DecoderOptimization:
 
         ray.init()
 
-        refs = {'estimator': ray.put(self.estimator), 'data': ray.put(tuple([X, y]))}
+        refs = {
+            "estimator": ray.put(self.estimator),
+            "data": ray.put(tuple([X, y])),
+            "hall_of_fame": ray.put({}),
+        }
 
         out_path_model = os.path.join(self.out_path, self.name)
         os.makedirs(out_path_model, exist_ok=True)
 
-        dir_results = os.path.abspath(os.path.join(out_path_model, 'ray_results'))
+        dir_results = os.path.abspath(os.path.join(out_path_model, "ray_results"))
         os.makedirs(dir_results, exist_ok=True)
 
-        print(f'\nStart hyperparameter search of {self.num_samples} candidates for {self.name} '
-              f'\n-----------------------------------------------------------')
+        print(
+            f"\nStart hyperparameter search of {self.num_samples} candidates for {self.name} "
+            f"\n-----------------------------------------------------------"
+        )
 
         cpu_per_sample = int(multiprocessing.cpu_count() / self.max_concurrent)
 
-        print(f'\nInitialize Search Optimization Schedule...')
+        print(f"\nInitialize Search Optimization Schedule...")
+
         opt = self.build_search_alg()
         sched = self.select_sched_alg()
 
         analysis = tune.run(
             tune.with_parameters(
                 train,
+                warm_restarts=self.warm_restarts,
                 object_store_ref=refs,
             ),
             name=self.exp_name,
             scheduler=sched,
             search_alg=opt,
-            stop={"training_iteration": self.num_cv, "is_bad": True},
+            stop={"training_iteration": self.max_iter, "is_bad": True},
             config=self.param_dist,
             resources_per_trial={"cpu": cpu_per_sample},
             num_samples=self.num_samples,
-            checkpoint_at_end=True,
+            checkpoint_at_end=False,
             local_dir=dir_results,
             trial_name_creator=get_trial_name,
             checkpoint_score_attr=self.metric,
             verbose=1,
         )
 
-        best_trial = analysis.get_best_trial(metric=self.metric, mode="max", scope="all")
+        best_trial = analysis.get_best_trial(
+            metric=self.metric, mode="max", scope="all"
+        )
         self.diagnostics = best_trial.last_result["result_grid_"]
 
         ray.shutdown()
@@ -301,11 +332,11 @@ class DecoderOptimization:
             tune.suggest.SearchAlgorithm: The initialized search algorithm.
         """
         if self.search_optimizer == "BO":
-            return SkOptSearch(metric=self.metric, mode='max')
+            return SkOptSearch(metric=self.metric, mode="max")
         elif self.search_optimizer == "HEBO":
-            return HEBOSearch(metric=self.metric, mode='max')
+            return HEBOSearch(metric=self.metric, mode="max")
         elif self.search_optimizer == "AX":
-            return AxSearch(metric=self.metric, mode='max')
+            return AxSearch(metric=self.metric, mode="max")
         else:
             raise ValueError("Unknown search optimizer. Select 'BO', 'HEBO', or 'AX'.")
 
@@ -316,26 +347,28 @@ class DecoderOptimization:
         Returns:
             tune.schedulers.TrialScheduler: The initialized scheduling algorithm.
         """
-        if self.search_scheduler == 'AsyncHyperBand':
+        if self.search_scheduler == "AsyncHyperBand":
             return AsyncHyperBandScheduler(
-                time_attr='training_iteration',
+                time_attr="training_iteration",
                 metric=self.metric,
-                mode='max',
-                max_t=self.num_cv,
+                mode="max",
+                max_t=self.max_iter,
                 grace_period=1,
                 reduction_factor=3,
                 brackets=3,
             )
-        elif self.search_scheduler == 'MedianStop':
+        elif self.search_scheduler == "MedianStop":
             return MedianStoppingRule(
-                time_attr='training_iteration',
+                time_attr="training_iteration",
                 metric=self.metric,
-                mode='max',
+                mode="max",
                 grace_period=1,
                 min_samples_required=3,
             )
         else:
-            raise ValueError('Unknown search scheduler. Select "MedianStop" or "AsyncHyperBand".')
+            raise ValueError(
+                'Unknown search scheduler. Select "MedianStop" or "AsyncHyperBand".'
+            )
 
     def file_name(self, exp_name: str) -> str:
         """
@@ -347,8 +380,10 @@ class DecoderOptimization:
         Returns:
             str: The full file name with additional details.
         """
-        exp_name += f'_RF_{self.device}_CV-{self.num_cv}_M_SAMP-{self.num_samples}'
-        exp_name += f'_{"Random" if self.search_optimizer is None else self.search_optimizer}'
+        exp_name += f"_RF_{self.device}_CV-{self.num_cv}_M_SAMP-{self.num_samples}"
+        exp_name += (
+            f'_{"Random" if self.search_optimizer is None else self.search_optimizer}'
+        )
         if self.search_scheduler:
-            exp_name += f'_{self.search_scheduler}'
+            exp_name += f"_{self.search_scheduler}"
         return exp_name

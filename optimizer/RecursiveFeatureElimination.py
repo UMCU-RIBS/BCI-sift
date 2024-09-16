@@ -32,7 +32,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: Tuple[int, ...]
+    :param dimensions: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
@@ -97,7 +97,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
     def __init__(
         self,
         # General and Decoder
-        dims: Tuple[int, ...],
+        dimensions: Tuple[int, ...],
         estimator: Union[BaseEstimator, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
@@ -114,7 +114,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
     ) -> None:
 
         super().__init__(
-            dims,
+            dimensions,
             estimator,
             estimator_params,
             scoring,

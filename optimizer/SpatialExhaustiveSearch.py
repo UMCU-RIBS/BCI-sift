@@ -26,7 +26,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
     Parameters:
     -----------
-    :param dims: Tuple[int, ...]
+    :param dimensions: Tuple[int, ...]
         A tuple of dimensions indies tc apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
@@ -122,7 +122,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             self,
 
             # General and Decoder
-            dims: Tuple[int, ...],
+            dimensions: Tuple[int, ...],
             estimator: Union[Any, Pipeline],
             estimator_params: Optional[Dict[str, any]] = None,
             scoring: str = 'f1_weighted',
@@ -143,7 +143,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
     ) -> None:
 
         super().__init__(
-            dims, estimator, estimator_params, scoring, cv, groups, tol,
+            dimensions, estimator, estimator_params, scoring, cv, groups, tol,
             patience, bounds, prior, callback, n_jobs, random_state, verbose
         )
 
@@ -158,14 +158,14 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
             A tuple with the solution, mask, the evaluation scores and the optimization history.
         """
-        if len(self.dims) > 2:
-            raise ValueError(f'Only two dimensions are allowed. Got {len(self.dims)}.')
+        if len(self.dimensions) > 2:
+            raise ValueError(f'Only two dimensions are allowed. Got {len(self.dimensions)}.')
         wait = 0
         best_score = 0.0
         best_state = None
 
         # Main loop over the number of starting positions
-        grid_dimensions = np.array(self.X_.shape)[np.array(self.dims)]
+        grid_dimensions = np.array(self.X_.shape)[np.array(self.dimensions)]
         grid = np.arange(1, np.prod(grid_dimensions) + 1).reshape(grid_dimensions)
         subgrids = self._generate_subgrids(*grid.shape)
 
@@ -261,7 +261,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         # Compute the height and width for each mask and assign them to the result grid
         self.result_grid_[['Height', 'Width']] = self.result_grid_['Mask'].apply(
             lambda mask: pd.Series(compute_subgrid_dimensions(mask.reshape(
-                tuple(np.array(self.X_.shape)[np.array(self.dims)]))))
+                tuple(np.array(self.X_.shape)[np.array(self.dimensions)]))))
         )
 
         # Reorder the columns to place 'Height' and 'Width' after 'Size'

@@ -10,7 +10,6 @@ from numbers import Real, Integral
 from typing import Tuple, List, Union, Dict, Any, Optional, Callable
 
 import numpy
-import numpy as np
 from scipy._lib._util import check_random_state
 from scipy.optimize import Bounds
 from scipy.optimize._constraints import new_bounds_to_old
@@ -97,10 +96,10 @@ class SimulatedAnnealing(BaseOptimizer):
     :param scoring: str, default = 'f1_weighted'
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int, float], default = 10
-        The cross-validation strategy or number of folds. If an integer is
-        passed, :code:`train_test_split` for 1 and :code:`StratifiedKFold`
-        is used for >1 as default. A float below 1 represents the percentage of
-        training samples for the train-test split ratio.
+        The cross-validation strategy or number of folds. If an integer is passed,
+        :code:`train_test_split` for <1 and :code:`BaseCrossValidator` is used for >1 as
+        default. A float below 1 represents the percentage of training samples for the
+        train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
         Groups for a LeaveOneGroupOut generator.
     :param strategy: str, default = "conditional"
@@ -115,7 +114,7 @@ class SimulatedAnnealing(BaseOptimizer):
         The number of iterations for the simulated annealing process.
     :param optimizer_method: str, default = 'L-BFGS-B'
         The tye of optimization method used. Valid options are:
-        'Nelder-Mead', 'Powell’, 'CG', 'BFGS', 'Newton-CG', 'L-BFGS-B',
+        'Nelder-Mead', 'Powell’, 'CG', 'BFGS','Newton-CG', 'L-BFGS-B',
         'TNC', 'COBYLA', 'COBYQA', 'SLSQP', 'trust-constr’', 'dogleg',
         'trust-ncg', 'trust-exact', 'trust-krylov'.
     :param local_search: bool, default = True
@@ -132,12 +131,15 @@ class SimulatedAnnealing(BaseOptimizer):
         The acceptance parameter for the annealing process.
     :param maxfun: float, default = 1e7
         The maximum function evaluations.
-    :param patience: int, default = int(1e5)
-        The number of iterations for which the objective function improvement
-        must be below tol to stop optimization.
     :param tol: float, default = 1e-5
-        The function tolerance; if the change in the best objective value is
-        below this for 'patience' iterations, the optimization will stop early.
+        The function tolerance; if the change in the best objective value is below this
+        for 'patience' iterations, the optimization will stop early. If 'conditional'
+        optimization is chosen, multiple stopping criteria can be passed; one for each
+        dimension.
+    :param patience: Union[int Tuple[int, ...], default = int(1e5)
+        The number of iterations for which the objective function improvement must be
+        below tol to stop optimization. If 'conditional' optimization is chosen, multiple
+        stopping criteria can be passed; one for each dimension.
     :param bounds: Tuple[float, float], default = (0.0, 1.0)
         Bounds for the algorithm's parameters to optimize. Since it is a binary
         selection task, bounds are set to (0.0, 1.0).
@@ -150,8 +152,8 @@ class SimulatedAnnealing(BaseOptimizer):
         which will be called at each iteration. :code: `x` and :code: `f` are
         the solution and function value, and :code: `context` contains the
         diagnostics of the current iteration.
-    :param n_jobs: int, default = 1
-        The number of parallel jobs to run during cross-validation.
+    :param n_jobs: Union[int, float], default = -1
+        The number of parallel jobs to run during cross-validation; -1 uses all cores.
     :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
     :param verbose: Union[bool, int], default = False
@@ -258,8 +260,8 @@ class SimulatedAnnealing(BaseOptimizer):
         accept: float = -5.0,
         maxfun: float = 1e7,
         # Training Settings
-        tol: float = 1e-5,
-        patience: int = int(1e5),
+        tol: Union[Tuple[int, ...], float] = 1e-5,
+        patience: Union[Tuple[int, ...], int] = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Callable] = None,
@@ -322,8 +324,8 @@ class SimulatedAnnealing(BaseOptimizer):
             raise ValueError("Bounds size does not match prior")
 
         lu = list(zip(*self.bounds_))
-        lower = np.array(lu[0])
-        upper = np.array(lu[1])
+        lower = numpy.array(lu[0])
+        upper = numpy.array(lu[1])
 
         # Check that restart temperature ratio is correct
         if self.restart_temp_ratio <= 0.0 or self.restart_temp_ratio >= 1.0:
@@ -331,22 +333,22 @@ class SimulatedAnnealing(BaseOptimizer):
 
         # Checking bounds are valid
         if (
-            np.any(np.isinf(lower))
-            or np.any(np.isinf(upper))
-            or np.any(np.isnan(lower))
-            or np.any(np.isnan(upper))
+            numpy.any(numpy.isinf(lower))
+            or numpy.any(numpy.isinf(upper))
+            or numpy.any(numpy.isnan(lower))
+            or numpy.any(numpy.isnan(upper))
         ):
             raise ValueError("Some bounds values are inf values or nan values")
 
         # Checking that bounds are consistent
-        if not np.all(lower < upper):
+        if not numpy.all(lower < upper):
             raise ValueError("Bounds are not consistent min < max")
 
         # Checking that bounds are the same length
         if not len(lower) == len(upper):
             raise ValueError("Bounds do not have the same dimensions")
 
-        minimizer_kwargs = {"method": self.optimizer_method, "tol": self.tol}
+        minimizer_kwargs = {"method": self.optimizer_method, "tol": self.tol_}
 
         # Wrapper for the objective function
         func_wrapper = ObjectiveFunWrapper(
@@ -381,10 +383,11 @@ class SimulatedAnnealing(BaseOptimizer):
             energy_state,
         )
         need_to_stop = False
+        self.iter_ = 0
         best_score = 0.0
         wait = 0
 
-        t1 = np.exp((self.visit - 1) * np.log(2.0)) - 1.0
+        t1 = numpy.exp((self.visit - 1) * numpy.log(2.0)) - 1.0
 
         # Run the search loop
         progress_bar = tqdm(
@@ -398,17 +401,18 @@ class SimulatedAnnealing(BaseOptimizer):
             for i in progress_bar:
                 # Compute temperature for this step
                 s = float(i) + 2.0
-                t2 = np.exp((self.visit - 1) * np.log(s)) - 1.0
+                t2 = numpy.exp((self.visit - 1) * numpy.log(s)) - 1.0
                 temperature = self.initial_temp * t1 / t2
 
                 # Update logs and early stopping
+                wait += 1
                 score = -energy_state.ebest
                 if best_score < score:
                     best_score = score
-                    progress_bar.set_postfix(best_score=f"{best_score:.6f}")
-                    if abs(best_score - score) > self.tol:
+                    if numpy.abs(best_score) - numpy.abs(score) > self.tol_:
                         wait = 0
-                if wait > self.patience:
+                progress_bar.set_postfix(best_score=f"{best_score:.6f}")
+                if wait > self.patience_:
                     progress_bar.set_postfix(
                         best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
                     )
@@ -465,12 +469,11 @@ class SimulatedAnnealing(BaseOptimizer):
         default bounds of (0, 1) for each dimension.
 
         :return: List[Tuple[float, float]]
-            A list of tuples
-            representing the lower and upper bounds for each dimension.
+            A list of tuples representing the lower and upper bounds for each dimension.
         """
-        return [self.bounds for _ in range(np.prod(self.dim_size_))]
+        return [self.bounds for _ in range(numpy.prod(self.dim_size_))]
 
-    def _handle_prior(self) -> Optional[np.ndarray]:
+    def _handle_prior(self) -> Optional[numpy.ndarray]:
         """
         This function checks the validity of the 'prior'; the function accepts an array
         (features, ) specifying the energy state. Otherwise, if a mask (features, ) is
@@ -478,7 +481,7 @@ class SimulatedAnnealing(BaseOptimizer):
 
         Returns:
         --------
-        return: np.ndarray, optional
+        return: numpy.ndarray, optional
             A numpy array of transformed prior values, or None if no prior is provided.
 
         """
@@ -492,7 +495,7 @@ class SimulatedAnnealing(BaseOptimizer):
             if self.prior.dtype == float:
                 return self.prior
             gaus = numpy.abs(numpy.random.normal(0, 0.06125, self.prior.size))
-            return np.where(
+            return numpy.where(
                 self.prior.flatten() < 0.5,
                 0.49 - gaus,
                 0.51 + gaus,

@@ -91,7 +91,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int, float], default = 10
         The cross-validation strategy or number of folds. If an integer is passed,
-        :code:`train_test_split` for 1 and :code:`StratifiedKFold` is used for >1 as
+        :code:`train_test_split` for <1 and :code:`BaseCrossValidator` is used for >1 as
         default. A float below 1 represents the percentage of training samples for the
         train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
@@ -164,12 +164,15 @@ class ParticleSwarmOptimization(BaseOptimizer):
             * Zero: Sets the velocity of out-of-bounds particles to zero.
     :param center: float, default = 1.0
         The center point influence in the topology of the swarm.
-    :param patience: int, default = int(1e5)
-        The number of iterations for which the objective function improvement must be
-        below tol to stop optimization.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
-        for 'patience' iterations, the optimization will stop early.
+        for 'patience' iterations, the optimization will stop early. If 'conditional'
+        optimization is chosen, multiple stopping criteria can be passed; one for each
+        dimension.
+    :param patience: Union[int Tuple[int, ...], default = int(1e5)
+        The number of iterations for which the objective function improvement must be
+        below tol to stop optimization. If 'conditional' optimization is chosen, multiple
+        stopping criteria can be passed; one for each dimension.
     :param bounds: Tuple[float, float], default = (0.0, 1.0)
         Bounds for the algorithm's parameters to optimize. Since it is a binary
         selection task, bounds are set to (0.0, 1.0).
@@ -181,8 +184,8 @@ class ParticleSwarmOptimization(BaseOptimizer):
         will be called at each iteration. :code: `x` and :code: `f` are the solution and
         function value, and :code: `context` contains the diagnostics of the current
         iteration.
-    :param n_jobs: int, default = 1
-        The number of parallel jobs to run during cross-validation.
+    :param n_jobs: Union[int, float], default = -1
+        The number of parallel jobs to run during cross-validation; -1 uses all cores.
     :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
     :param verbose: Union[bool, int], default = False
@@ -255,7 +258,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
             "p": [Interval(Integral, 1, None, closed="left")],
             "oh_strategy": [StrOptions({"exp_decay", "lin_variation", "random", "nonlin_mod"}),None,],
             "bh_strategy": [StrOptions({"nearest", "random", "shrink", "reflective", "intermediate","periodic",})],
-            "velocity_clamp": [tuple, None],
+            "velocity_clamp": ["array-like", None],
             "vh_strategy": [StrOptions({"unmodified", "adjust", "invert", "zero"})],
             "center": [Interval(Real, 0, None, closed="left")],
         }
@@ -288,8 +291,8 @@ class ParticleSwarmOptimization(BaseOptimizer):
         vh_strategy: str = "unmodified",
         center: float = 1.0,
         # Training Settings
-        tol: float = 1e-5,
-        patience: int = int(1e5),
+        tol: Union[Tuple[int, ...], float] = 1e-5,
+        patience: Union[Tuple[int, ...], int] = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Callable] = None,
@@ -377,7 +380,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
         vh.memory = swarm.position
 
         # Setup Pool of processes for parallel evaluation
-        pool = None if self.n_jobs == 1 else multiprocessing.Pool(self.n_jobs)
+        pool = None if self.n_jobs < 2 else multiprocessing.Pool(self.n_jobs)
         ftol_history = deque(maxlen=self.patience)
 
         # Run the search loop
@@ -405,7 +408,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
             else:
                 swarm.best_pos, swarm.best_cost = top.compute_gbest(swarm)
 
-            # verbosity and early stopping
+            # Update logs and early stopping
             best_score = -swarm.best_cost
             progress_bar.set_postfix(best_score=f"{best_score:.6f}")
             if -swarm.best_cost >= 1.0:
@@ -421,15 +424,15 @@ class ParticleSwarmOptimization(BaseOptimizer):
                     break
 
             # Verify stop criteria based on the relative acceptable cost tol
-            relative_measure = self.tol * (1 + numpy.abs(best_cost_yet_found))
+            relative_measure = self.tol_ * (1 + numpy.abs(best_cost_yet_found))
             delta = numpy.abs(swarm.best_cost - best_cost_yet_found) < relative_measure
-            if self.iter_ < self.patience:
+            if self.iter_ < self.patience_:
                 ftol_history.append(delta)
             else:
                 ftol_history.append(delta)
                 if all(ftol_history):
                     progress_bar.set_postfix(
-                        best_score=f"Early Stopping Criteria reached: {swarm.best_cost:.6f}"
+                        best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
                     )
                     break
 

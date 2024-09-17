@@ -68,7 +68,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int, float], default = 10
         The cross-validation strategy or number of folds. If an integer is passed,
-        :code:`train_test_split` for 1 and :code:`StratifiedKFold` is used for >1 as
+        :code:`train_test_split` for <1 and :code:`BaseCrossValidator` is used for >1 as
         default. A float below 1 represents the percentage of training samples for the
         train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
@@ -81,12 +81,15 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         * Conditional Optimization: Optimizes each feature dimension iteratively,
           building on previous results. Generally, yields better performance for large
           search spaces.
-    :param patience: int, default = int(1e5)
-        The number of iterations for which the objective function improvement must be
-        below tol to stop optimization.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
-        for 'patience' iterations, the optimization will stop early.
+        for 'patience' iterations, the optimization will stop early. If 'conditional'
+        optimization is chosen, multiple stopping criteria can be passed; one for each
+        dimension.
+    :param patience: Union[int Tuple[int, ...], default = int(1e5)
+        The number of iterations for which the objective function improvement must be
+        below tol to stop optimization. If 'conditional' optimization is chosen, multiple
+        stopping criteria can be passed; one for each dimension.
     :param bounds: Tuple[float, float], default = (0.0, 1.0)
         Bounds for the algorithm's parameters to optimize. Since it is a binary
         selection task, bounds are set to (0.0, 1.0).
@@ -98,8 +101,8 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         will be called at each iteration. :code: `x` and :code: `f` are the solution and
         function value, and :code: `context` contains the diagnostics of the current
         iteration.
-    :param n_jobs: int, default = 1
-        The number of parallel jobs to run during cross-validation.
+    :param n_jobs: Union[int, float], default = -1
+        The number of parallel jobs to run during cross-validation; -1 uses all cores.
     :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
     :param verbose: Union[bool, int], default = False
@@ -126,27 +129,29 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
     :return: None
     """
 
+    # fmt: off
     _parameter_constraints: dict = {
-        "dims": [tuple],
+        "dims": ["array-like"],
         "estimator": [HasMethods(["fit"])],
         "estimator_params": [dict, None],
         "scoring": [StrOptions(set(get_scorer_names()))],
         "cv": [
             "cv_object",
             Interval(Integral, 1, None, closed="left"),
-            Interval(Real, 0, 1, closed="both"),
+            Interval(Real, 1e-2, 1 - 1e-2, closed="both"),
         ],
         "groups": [numpy.ndarray, None],
         "strategy": [StrOptions({"joint", "conditional"})],
-        "tol": [Interval(Real, 0, None, closed="left")],
-        "patience": [Interval(Integral, 0, None, closed="left")],
-        "bounds": [tuple],
+        "tol": ["array-like", Interval(Real, 0, None, closed="left")],
+        "patience": ["array-like", Interval(Integral, 0, None, closed="left")],
+        "bounds": ["array-like"],
         "prior": [numpy.ndarray, None],
         "callback": [callable, None],
         "n_jobs": [Integral],
         "seed": ["random_state"],
         "verbose": ["verbose"],
     }
+    # fmt: on
 
     def __init__(
         self,
@@ -159,8 +164,8 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         groups: Optional[numpy.ndarray] = None,
         strategy: str = "conditional",
         # Training Settings
-        tol: float = 1e-5,
-        patience: int = int(1e5),
+        tol: Union[Tuple[int, ...], float] = 1e-5,
+        patience: Union[Tuple[int, ...], int] = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Callable] = None,
@@ -239,29 +244,69 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             X, y, reset=False, ensure_2d=False, allow_nd=True
         )
         del X, y
-        if max(self.dimensions) > self.X_.ndim:
+
+        if numpy.max(self.dimensions) > self.X_.ndim:
             raise ValueError(
-                f"dims cannot exceed the dimensions of the data. Got {self.dimensions}"
+                f"The parameter 'dimensions' cannot exceed the data's dimensions. "
+                f"Got {self.dimensions} with data dimension {self.X_.ndim}."
             )
-        if self.n_jobs == 1:
+        if not isinstance(self.tol, float):
+            if not numpy.all([isinstance(tol, float) for tol in self.tol]):
+                raise ValueError(
+                    f"The parameters 'tol' must contain floats. Got {self.tol}."
+                )
+            elif len(self.tol) != len(self.dimensions):
+                raise ValueError(
+                    f"The parameters 'tol' must match the length of 'dimensions'. "
+                    f"Got lengths {len(self.tol)}, expected {len(self.dimensions)}."
+                )
+            if self.strategy == "joint":
+                raise ValueError(
+                    f"When parameter 'strategy' is set to 'joint', the parameter 'patience' "
+                    f"must be an integer. Got {type(self.patience).__name__}."
+                )
+        if not isinstance(self.patience, int):
+            if not numpy.all([isinstance(p, int) for p in self.patience]):
+                raise ValueError(
+                    f"The parameters 'patience' must contain integer. Got {self.patience}."
+                )
+            elif len(self.patience) != len(self.dimensions):
+                raise ValueError(
+                    f"The parameters 'patience' must match the length of 'dimensions'. "
+                    f"Got lengths {len(self.patience)}, expected {len(self.dimensions)}."
+                )
+            if self.strategy == "joint":
+                raise ValueError(
+                    f"When parameter 'strategy' is set to 'joint', the parameter 'tol' "
+                    f"must be a float. Got {type(self.tol).__name__}."
+                )
+        if self.cv == 1:
             raise ValueError(
-                f"n_jobs = 1, assumes no test set data. if n_jobs < 1, a train-test "
-                f"split of the ratio specified by n_jobs is used. "
+                f"The parameter 'cv' cannot be 1. Use 'cv < 1' for a train-test split "
+                f"or 'cv > 1' for cross-validation."
             )
+        if numpy.prod(self.X_.shape[1:]) > int(1.5e4):
+            warnings.warn(
+                f"A large numbers of features was detected (N = "
+                f"{numpy.prod(self.X_.shape[1:])}. If convergence is slow consider to "
+                f"reduce the number of features.",
+                UserWarning,
+            )
+
         random.seed(self.random_state)
         numpy.random.seed(self.random_state)
 
-        if isinstance(self.cv, int):
-            self.n_cv_ = self.cv
-            self.split_ = 1 - self.n_cv_ if self.n_cv_ < 1 else 0.2
-        else:
-            self.n_cv_ = self.cv.get_n_splits(groups=self.groups)
-            self.split_ = None
+        self.n_cv_ = (
+            self.cv
+            if isinstance(self.cv, (int, float))
+            else self.cv.get_n_splits(groups=self.groups)
+        )
 
         if self.estimator_params:
             self._set_estimator_params()
         self._check_estimator_data_requirements()
 
+        self.iter_ = 0
         self.result_grid_ = []
         if self.n_jobs > 1:
             manager = multiprocessing.Manager()
@@ -273,7 +318,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             else self.fit_conditional(self.X_)
         )
 
-    def fit_joint(self) -> None:
+    def fit_joint(self) -> Type["BaseOptimizer"]:
         """Fit the model using the joint optimization strategy."""
         self.dims_incl_ = sorted(self.dimensions)
         self.dim_size_ = tuple(numpy.array(self.X_.shape)[list(self.dims_incl_)])
@@ -282,6 +327,8 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             for d in range(self.X_.ndim)
         )
 
+        self.tol_ = self.tol
+        self.patience_ = self.patience
         self.bounds_ = self._handle_bounds()
         self.prior_ = self._handle_prior()
 
@@ -291,7 +338,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         self._prepare_result_grid()
         return self
 
-    def fit_conditional(self, X: numpy.ndarray) -> None:
+    def fit_conditional(self, X: numpy.ndarray) -> Type["BaseOptimizer"]:
         """Fit the model using the conditional optimization strategy."""
         self.mask_ = numpy.full(self.X_.shape, fill_value=True)
         self.solution_, self.state_, self.score_ = [], [], []
@@ -303,8 +350,12 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
                 for d in range(self.X_.ndim)
             )
 
+            # fmt: off
+            self.tol_ = self.tol[idx] if not isinstance(self.tol, float) else self.tol
+            self.patience_ = (self.patience[idx] if not isinstance(self.patience, int) else self.patience)
             self.bounds_ = self._handle_bounds()
-            self.prior_ = self._handle_prior()
+            self.prior_ = self._handle_prior()           # TODO need an array-like of priors otherwise an error will arise
+            # fmt: on
 
             solution, state, score = self._run()
 
@@ -314,7 +365,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             self.mask_ *= self._prepare_mask(state.reshape(self.dim_size_))
             self.X_ = self.transform(X)
 
-            self._prepare_result_grid()
+        self._prepare_result_grid()
         return self
 
     def transform(
@@ -439,7 +490,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             X_train, X_test, y_train, y_test = train_test_split(
                 selected_features,
                 self.y_,
-                test_size=self.split_,
+                test_size=self.n_cv_,
                 random_state=self.random_state,
             )
             estimator_clone = clone(self.estimator)

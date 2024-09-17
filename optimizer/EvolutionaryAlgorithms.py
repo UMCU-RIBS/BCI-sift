@@ -92,7 +92,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int, float], default = 10
         The cross-validation strategy or number of folds. If an integer is passed,
-        :code:`train_test_split` for 1 and :code:`StratifiedKFold` is used for >1 as
+        :code:`train_test_split` for <1 and :code:`BaseCrossValidator` is used for >1 as
         default. A float below 1 represents the percentage of training samples for the
         train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
@@ -160,12 +160,15 @@ class EvolutionaryAlgorithms(BaseOptimizer):
     :param sel_nd: str, default = 'standard'
         The non-dominated sorting type for NSGA-II selection. Valid options are
         'standard' and 'log.
-    :param patience: int, default = int(1e5)
-        The number of iterations for which the objective function improvement must be
-        below tol to stop optimization.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
-        for 'patience' iterations, the optimization will stop early.
+        for 'patience' iterations, the optimization will stop early. If 'conditional'
+        optimization is chosen, multiple stopping criteria can be passed; one for each
+        dimension.
+    :param patience: Union[int Tuple[int, ...], default = int(1e5)
+        The number of iterations for which the objective function improvement must be
+        below tol to stop optimization. If 'conditional' optimization is chosen, multiple
+        stopping criteria can be passed; one for each dimension.
     :param bounds: Tuple[float, float], default = (0.0, 1.0)
         Bounds for the algorithm's parameters to optimize. Since it is a binary
         selection task, bounds are set to (0.0, 1.0).
@@ -177,8 +180,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         will be called at each iteration. :code: `x` and :code: `f` are the solution and
         function value, and :code: `context` contains the diagnostics of the current
         iteration.
-    :param n_jobs: int, default = 1
-        The number of parallel jobs to run during cross-validation.
+    :param n_jobs: Union[int, float], default = -1
+        The number of parallel jobs to run during cross-validation; -1 uses all cores.
     :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
     :param verbose: Union[bool, int], default = False
@@ -228,7 +231,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         grid = (2, 3)
         estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
 
-        ea = ParticleSwarmOptimization(grid, estimator)
+        ea = EvolutionaryAlgorithms(grid, estimator)
         ea.fit(X, y)
         print(ea.score_)
         26.545670995670996
@@ -307,8 +310,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         sel_tournsize: int = 3,
         sel_nd: str = "standard",
         # Training Settings
-        tol: float = 1e-5,
-        patience: int = int(1e5),
+        tol: Union[Tuple[int, ...], float] = 1e-5,
+        patience: Union[Tuple[int, ...], int] = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Union[Callable, Type]] = None,
@@ -418,13 +421,14 @@ class EvolutionaryAlgorithms(BaseOptimizer):
                 populations = self._migrate(populations, topology="ring")
 
             # Update logs and early stopping
-            score = max(log.select("max"))
+            wait += 1
+            score = numpy.max(log.select("max"))
             if best_score < score:
                 best_score = hof.items[0].fitness.values[0]
-                progress_bar.set_postfix(best_score=f"{best_score:.6f}")
-                if abs(best_score - score) > self.tol:
+                if numpy.abs(best_score) - numpy.abs(score) > self.tol_:
                     wait = 0
-            if wait > self.patience:
+            progress_bar.set_postfix(best_score=f"{best_score:.6f}")
+            if wait > self.patience_:
                 progress_bar.set_postfix(
                     best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
                 )
@@ -694,7 +698,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         toolbox = base.Toolbox()
 
         pool = None
-        if self.n_jobs > 1:
+        if self.n_jobs >= 2:
             pool = multiprocessing.Pool(self.n_jobs)
             toolbox.register("map", pool.map)
 

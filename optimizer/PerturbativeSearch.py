@@ -8,12 +8,14 @@
 # -------------------------------------------------------------
 import multiprocessing
 from functools import partial
+from numbers import Integral
 from typing import Optional, Union, Any, Dict, Tuple, Callable
 
 import numpy
 import numpy as np
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
+from sklearn.utils._param_validation import Interval
 from tqdm import tqdm
 
 from optimizer.Base_Optimizer import BaseOptimizer
@@ -39,7 +41,7 @@ class PerturbativeSearch(BaseOptimizer):
         The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int, float], default = 10
         The cross-validation strategy or number of folds. If an integer is passed,
-        :code:`train_test_split` for 1 and :code:`StratifiedKFold` is used for >1 as
+        :code:`train_test_split` for <1 and :code:`BaseCrossValidator` is used for >1 as
         default. A float below 1 represents the percentage of training samples for the
         train-test split ratio.
     :param groups: Optional[numpy.ndarray], optional
@@ -56,12 +58,15 @@ class PerturbativeSearch(BaseOptimizer):
         The number of iterations for the rand search process.
     :param n_perturbations : int, default = 30
         The number of perturbations to be executed per iteration.
-    :param patience: int, default = int(1e5)
-        The number of iterations for which the objective function improvement must be
-        below tol to stop optimization.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
-        for 'patience' iterations, the optimization will stop early.
+        for 'patience' iterations, the optimization will stop early. If 'conditional'
+        optimization is chosen, multiple stopping criteria can be passed; one for each
+        dimension.
+    :param patience: Union[int Tuple[int, ...], default = int(1e5)
+        The number of iterations for which the objective function improvement must be
+        below tol to stop optimization. If 'conditional' optimization is chosen, multiple
+        stopping criteria can be passed; one for each dimension.
     :param bounds: Tuple[float, float], default = (0.0, 1.0)
         Bounds for the algorithm's parameters to optimize. Since it is a binary
         selection task, bounds are set to (0.0, 1.0).
@@ -72,8 +77,8 @@ class PerturbativeSearch(BaseOptimizer):
         will be called at each iteration. :code: `x` and :code: `f` are the solution and
         function value, and :code: `context` contains the diagnostics of the current
         iteration.
-    :param n_jobs: int, default = 1
-        The number of parallel jobs to run during cross-validation.
+    :param n_jobs: Union[int, float], default = -1
+        The number of parallel jobs to run during cross-validation; -1 uses all cores.
     :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
     :param verbose: Union[bool, int], default = False
@@ -108,6 +113,16 @@ class PerturbativeSearch(BaseOptimizer):
     :return: None
     """
 
+    # fmt: off
+    _parameter_constraints: dict = {**BaseOptimizer._parameter_constraints}
+    _parameter_constraints.update(
+        {
+            "n_iter": [Interval(Integral, 1, None, closed="left")],
+            "n_pertubations": [Interval(Integral, 1, None, closed="left")],
+        }
+    )
+    # fmt: on
+
     def __init__(
         self,
         # General and Decoder
@@ -122,8 +137,8 @@ class PerturbativeSearch(BaseOptimizer):
         n_iter: int = 100,
         n_perturbations: int = 20,
         # Training Settings
-        tol: float = 1e-5,
-        patience: int = int(1e5),
+        tol: Union[Tuple[int, ...], float] = 1e-5,
+        patience: Union[Tuple[int, ...], int] = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Callable] = None,
@@ -171,7 +186,7 @@ class PerturbativeSearch(BaseOptimizer):
         best_state = None
 
         # Setup Pool of processes for parallel evaluation
-        pool = None if self.n_jobs == 1 else multiprocessing.Pool(self.n_jobs)
+        pool = None if self.n_jobs < 2 else multiprocessing.Pool(self.n_jobs)
 
         # Run search
         idtr = f"{self.dims_incl_}: " if isinstance(self.dims_incl_, int) else ""
@@ -186,18 +201,20 @@ class PerturbativeSearch(BaseOptimizer):
             mask = np.random.uniform(
                 self.bounds_[0],
                 self.bounds[1],
-                size=(self.n_jobs, np.prod(self.dim_size_)),
+                size=(int(numpy.ceil(self.n_jobs)), np.prod(self.dim_size_)),
             )
-            scores = self._compute_objective(self._objective_function, mask, pool)
-            score = max(scores)
+
             # Update logs and early stopping
+            wait += 1
+            scores = self._compute_objective(self._objective_function, mask, pool)
+            score = numpy.max(scores)
             if best_score < score:
                 best_score = score
                 best_state = mask[scores == score]
-                progress_bar.set_postfix(best_score=f"{best_score:.6f}")
-                if abs(best_score - score) > self.tol:
+                if numpy.abs(best_score) - numpy.abs(score) > self.tol_:
                     wait = 0
-            if wait > self.patience:
+            progress_bar.set_postfix(best_score=f"{best_score:.6f}")
+            if wait > self.patience_:
                 progress_bar.set_postfix(
                     best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
                 )
@@ -248,7 +265,7 @@ class PerturbativeSearch(BaseOptimizer):
         """
         # If no pool is provided, compute scores sequentially
         if pool is None:
-            return numpy.array([objective_func])
+            return numpy.array([objective_func(random_perturbations)])
         else:
             # Use multiprocessing pool to compute scores in parallel
             results = pool.map(

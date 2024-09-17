@@ -408,9 +408,9 @@ class SimulatedAnnealing(BaseOptimizer):
                 wait += 1
                 score = -energy_state.ebest
                 if best_score < score:
-                    best_score = score
-                    if numpy.abs(best_score) - numpy.abs(score) > self.tol_:
+                    if best_score - score > self.tol_:
                         wait = 0
+                    best_score = score
                 progress_bar.set_postfix(best_score=f"{best_score:.6f}")
                 if wait > self.patience_:
                     progress_bar.set_postfix(

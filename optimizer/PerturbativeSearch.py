@@ -209,10 +209,10 @@ class PerturbativeSearch(BaseOptimizer):
             scores = self._compute_objective(self._objective_function, mask, pool)
             score = numpy.max(scores)
             if best_score < score:
+                if best_score - score > self.tol_:
+                    wait = 0
                 best_score = score
                 best_state = mask[scores == score]
-                if numpy.abs(best_score) - numpy.abs(score) > self.tol_:
-                    wait = 0
             progress_bar.set_postfix(best_score=f"{best_score:.6f}")
             if wait > self.patience_:
                 progress_bar.set_postfix(

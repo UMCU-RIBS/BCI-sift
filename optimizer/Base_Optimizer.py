@@ -6,7 +6,6 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-import multiprocessing
 import random
 import warnings
 from abc import ABC, abstractmethod
@@ -32,6 +31,7 @@ from sklearn.utils._param_validation import (
     Interval,
     StrOptions,
     HasMethods,
+    RealNotInt,
 )
 from sklearn.utils.validation import check_is_fitted
 
@@ -130,6 +130,8 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
     """
 
     # fmt: off
+    _custom_store = {}
+
     _parameter_constraints: dict = {
         "dims": ["array-like"],
         "estimator": [HasMethods(["fit"])],
@@ -138,7 +140,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         "cv": [
             "cv_object",
             Interval(Integral, 1, None, closed="left"),
-            Interval(Real, 1e-2, 1 - 1e-2, closed="both"),
+            Interval(RealNotInt, 0, 1, closed="both"),
         ],
         "groups": [numpy.ndarray, None],
         "strategy": [StrOptions({"joint", "conditional"})],
@@ -206,15 +208,19 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         """
         # Checking one attribute is enough, because they are all set together
         # in partial_fit
-        if hasattr(self, "X_"):
-            del self.X_
-            del self.y_
+        if hasattr(self, "_X"):
+            del self._X
+            del self._y
+            del self.iter_
             del self.result_grid_
-            del self.n_cv_
-            del self.dims_incl_
-            del self.dim_size_
-            del self.prior_
-            del self.bounds_
+            del self._scorer
+            del self._n_cv
+            del self._estimator
+            del self._dims_incl
+            del self._dim_size
+            del self._slices
+            del self._prior
+            del self._bounds
             del self.solution_
             del self.mask_
             del self.score_
@@ -240,55 +246,51 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         """
         self._reset()
 
-        self.X_, self.y_ = self._validate_data(
+        self._X, self._y = self._validate_data(
             X, y, reset=False, ensure_2d=False, allow_nd=True
         )
         del X, y
 
-        if numpy.max(self.dimensions) > self.X_.ndim:
+        if numpy.max(self.dimensions) > self._X.ndim:
             raise ValueError(
                 f"The parameter 'dimensions' cannot exceed the data's dimensions. "
-                f"Got {self.dimensions} with data dimension {self.X_.ndim}."
+                f"Got {self.dimensions} with data dimension {self._X.ndim}."
             )
-        if not isinstance(self.tol, float):
-            if not numpy.all([isinstance(tol, float) for tol in self.tol]):
+        for param, expected_type, name in [
+            (self.tol, float, "tol"),
+            (self.patience, int, "patience"),
+        ]:
+            is_array_like = False
+            if not isinstance(param, expected_type):
+                is_array_like = True
+            if is_array_like and len(param) != len(self.dimensions):
                 raise ValueError(
-                    f"The parameters 'tol' must contain floats. Got {self.tol}."
+                    f"The parameter '{name}' must have the same length as 'dimensions'. "
+                    f"Got {len(param)}, expected {len(self.dimensions)}."
                 )
-            elif len(self.tol) != len(self.dimensions):
+            elif is_array_like and not numpy.all(
+                isinstance(p, expected_type) for p in param
+            ):
                 raise ValueError(
-                    f"The parameters 'tol' must match the length of 'dimensions'. "
-                    f"Got lengths {len(self.tol)}, expected {len(self.dimensions)}."
+                    f"The parameter '{name}' must contain {expected_type.__name__}s. Got {param}."
                 )
-            if self.strategy == "joint":
-                raise ValueError(
-                    f"When parameter 'strategy' is set to 'joint', the parameter 'patience' "
-                    f"must be an integer. Got {type(self.patience).__name__}."
-                )
-        if not isinstance(self.patience, int):
-            if not numpy.all([isinstance(p, int) for p in self.patience]):
-                raise ValueError(
-                    f"The parameters 'patience' must contain integer. Got {self.patience}."
-                )
-            elif len(self.patience) != len(self.dimensions):
-                raise ValueError(
-                    f"The parameters 'patience' must match the length of 'dimensions'. "
-                    f"Got lengths {len(self.patience)}, expected {len(self.dimensions)}."
-                )
-            if self.strategy == "joint":
-                raise ValueError(
-                    f"When parameter 'strategy' is set to 'joint', the parameter 'tol' "
-                    f"must be a float. Got {type(self.tol).__name__}."
-                )
+            elif is_array_like and self.strategy == "joint":
+                if (name == "tol" and not isinstance(self.patience, int)) or (
+                    name == "patience" and not isinstance(self.tol, float)
+                ):
+                    raise ValueError(
+                        f"When 'strategy' is set to 'joint', '{name}' must be of type "
+                        f"{expected_type.__name__}. Got {type(param).__name__}."
+                    )
         if self.cv == 1:
             raise ValueError(
                 f"The parameter 'cv' cannot be 1. Use 'cv < 1' for a train-test split "
                 f"or 'cv > 1' for cross-validation."
             )
-        if numpy.prod(self.X_.shape[1:]) > int(1.5e4):
+        if numpy.prod(self._X.shape[1:]) > int(1.5e4):
             warnings.warn(
                 f"A large numbers of features was detected (N = "
-                f"{numpy.prod(self.X_.shape[1:])}. If convergence is slow consider to "
+                f"{numpy.prod(self._X.shape[1:])}. If convergence is slow consider to "
                 f"reduce the number of features.",
                 UserWarning,
             )
@@ -296,65 +298,64 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         random.seed(self.random_state)
         numpy.random.seed(self.random_state)
 
-        self.n_cv_ = (
+        self._scorer = get_scorer(self.scoring)
+        self._n_cv = (
             self.cv
             if isinstance(self.cv, (int, float))
             else self.cv.get_n_splits(groups=self.groups)
         )
 
+        self._estimator = clone(self.estimator)
         if self.estimator_params:
             self._set_estimator_params()
         self._check_estimator_data_requirements()
 
         self.iter_ = 0
         self.result_grid_ = []
-        if self.n_jobs > 1:
-            manager = multiprocessing.Manager()
-            self.result_grid_ = manager.list()
 
         return (
             self.fit_joint()
             if self.strategy == "joint"
-            else self.fit_conditional(self.X_)
+            else self.fit_conditional(self._X)
         )
 
     def fit_joint(self) -> Type["BaseOptimizer"]:
         """Fit the model using the joint optimization strategy."""
-        self.dims_incl_ = sorted(self.dimensions)
-        self.dim_size_ = tuple(numpy.array(self.X_.shape)[list(self.dims_incl_)])
-        self.slices_ = tuple(
-            numpy.newaxis if d not in self.dims_incl_ else slice(None)
-            for d in range(self.X_.ndim)
+        self._dims_incl = sorted(self.dimensions)
+        self._dim_size = tuple(numpy.array(self._X.shape)[list(self._dims_incl)])
+        self._slices = tuple(
+            numpy.newaxis if d not in self._dims_incl else slice(None)
+            for d in range(self._X.ndim)
         )
 
-        self.tol_ = self.tol
-        self.patience_ = self.patience
-        self.bounds_ = self._handle_bounds()
-        self.prior_ = self._handle_prior()
+        self._tol = self.tol
+        self._patience = self.patience
+        self._bounds = self._handle_bounds()
+        self._prior = self._handle_prior()
 
         self.solution_, self.state_, self.score_ = self._run()
-        self.mask_ = self._prepare_mask(self.state_.reshape(self.dim_size_))
+        self.mask_ = self._prepare_mask(self.state_.reshape(self._dim_size))
 
         self._prepare_result_grid()
         return self
 
     def fit_conditional(self, X: numpy.ndarray) -> Type["BaseOptimizer"]:
         """Fit the model using the conditional optimization strategy."""
-        self.mask_ = numpy.full(self.X_.shape, fill_value=True)
+        self.mask_ = numpy.full(self._X.shape, fill_value=True)
         self.solution_, self.state_, self.score_ = [], [], []
 
-        for idx, self.dims_incl_ in enumerate(self.dimensions):
-            self.dim_size_ = numpy.array(self.X_.shape)[self.dims_incl_]
-            self.slices_ = tuple(
-                numpy.newaxis if d != self.dims_incl_ else slice(None)
-                for d in range(self.X_.ndim)
+        for idx, self._dims_incl in enumerate(self.dimensions):
+            self._dim_size = numpy.array(self._X.shape)[self._dims_incl]
+            self._slices = tuple(
+                numpy.newaxis if d != self._dims_incl else slice(None)
+                for d in range(self._X.ndim)
             )
 
             # fmt: off
-            self.tol_ = self.tol[idx] if not isinstance(self.tol, float) else self.tol
-            self.patience_ = (self.patience[idx] if not isinstance(self.patience, int) else self.patience)
-            self.bounds_ = self._handle_bounds()
-            self.prior_ = self._handle_prior()           # TODO need an array-like of priors otherwise an error will arise
+            self._tol = self.tol[idx] if not isinstance(self.tol, float) else self.tol
+            self._patience = (self.patience[idx] if not isinstance(self.patience, int) else self.patience)
+            self._bounds = self._handle_bounds()
+            self._prior = self._handle_prior()           # TODO need an array-like of priors otherwise an error will arise
             # fmt: on
 
             solution, state, score = self._run()
@@ -362,8 +363,8 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             self.solution_.append(solution)
             self.state_.append(state)
             self.score_.append(score)
-            self.mask_ *= self._prepare_mask(state.reshape(self.dim_size_))
-            self.X_ = self.transform(X)
+            self.mask_ *= self._prepare_mask(state.reshape(self._dim_size))
+            self._X = self.transform(X)
 
         self._prepare_result_grid()
         return self
@@ -424,7 +425,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             mask = numpy.array(mask) > 0.5
 
         full_mask = self._prepare_mask(mask)
-        selected_features = self.X_ * full_mask.astype(int)
+        selected_features = self._X * full_mask.astype(int)
 
         scores, train_times, infer_times = self._evaluate_candidates(selected_features)
         score, train_time, infer_time = (
@@ -452,8 +453,8 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         :return: numpy.ndarray
             The full mask is broadcasted to match the shape of the data tensor.
         """
-        reshaped_mask = mask.reshape(self.dim_size_)[self.slices_]
-        full_mask = numpy.zeros(self.X_.shape, dtype=bool)
+        reshaped_mask = mask.reshape(self._dim_size)[self._slices]
+        full_mask = numpy.zeros(self._X.shape, dtype=bool)
         full_mask[numpy.broadcast_to(reshaped_mask, full_mask.shape)] = True
         return full_mask
 
@@ -474,31 +475,28 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             The evaluation scores, training and inference time for the selected
             features.
         """
-        scorer = get_scorer(self.scoring)
-
         # Handle the edge case where no features are selected
         if selected_features.size == 0 or not numpy.any(selected_features):
             return (
-                numpy.full((int(self.n_cv_),), fill_value=0.0),
+                numpy.full((int(numpy.ceil(self._n_cv)),), fill_value=0.0),
                 numpy.array([0]),
                 numpy.array([0]),
             )
 
         # Handle train-test split where n_cv_ <= 1
-        if self.n_cv_ <= 1:
-            # Split the data into train and test sets
+        if self._n_cv <= 1:
             X_train, X_test, y_train, y_test = train_test_split(
                 selected_features,
-                self.y_,
-                test_size=self.n_cv_,
+                self._y,
+                test_size=self._n_cv,
                 random_state=self.random_state,
             )
-            estimator_clone = clone(self.estimator)
+            estimator_clone = clone(self._estimator)
 
             with PerfTimer() as train_timer:
                 estimator_clone.fit(X_train, y_train)
             with PerfTimer() as inference_timer:
-                scores = scorer(estimator_clone, X_test, y_test)
+                scores = self._scorer(estimator_clone, X_test, y_test)
             return (
                 numpy.array(scores),
                 numpy.array(train_timer.duration),
@@ -507,15 +505,16 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
 
         # Handle cross-validation where n_cv_ > 1
         result = cross_validate(
-            self.estimator,
+            self._estimator,
             selected_features,
-            self.y_,
-            scoring=scorer,
+            self._y,
+            scoring=self._scorer,
             cv=self.cv,
+            return_estimator=True,
             groups=self.groups,
             n_jobs=self.n_jobs,
         )
-        return result["test_score"], result["fit_time"], result["score_time"]
+        return (result["test_score"], result["fit_time"], result["score_time"])
 
     def _save_statistics(
         self,
@@ -527,7 +526,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         """
         Saves the diagnostics at a given iteration. The diagnostics include: Method,
         Iteration, Mask, Size, Metric, Mean, Median, SD, CI Lower, CI Upper, Train Time,
-        Infer Time and the score from the crossvaldiation folds (if selected).
+        Infer Time and the fold score from the cross-valdiation folds (if selected).
 
         Parameters:
         -----------
@@ -543,24 +542,26 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         diagnostics = {
             "Method": self.__class__.__name__,
             "Iteration": self.iter_,
-            "Dimensions": to_string(self.dims_incl_),
-            "Mask": [mask.reshape(self.dim_size_)],
+            "Dimensions": to_string(self._dims_incl),
+            "Mask": [mask.reshape(self._dim_size)],
             "Size": numpy.sum(mask),
             "Metric": self.scoring,
             "Mean": numpy.round(numpy.mean(scores), 6),
             "Median": numpy.round(numpy.median(scores), 6),
             "SD": numpy.round(numpy.std(scores), 6),
-            "Train Time": train_time,
-            "Infer Time": infer_time,
+            "Train Time": numpy.round(train_time, 6),
+            "Infer Time": numpy.round(infer_time, 6),
         }
 
-        if self.n_cv_ > 1:
+        if self._n_cv > 1:
             ci = stats.t.interval(
                 0.95, len(scores) - 1, loc=numpy.mean(scores), scale=stats.sem(scores)
             )
-            diagnostics["CI Lower"] = (numpy.round(ci[0], 6),)
-            diagnostics["CI Upper"] = (numpy.round(ci[1], 6),)
-            for i, score in enumerate(scores):
+            ci = numpy.round(ci, 6)
+
+            diagnostics["95-CI Lower"] = ci[0] if not numpy.isnan(ci[0]) else 0
+            diagnostics["95-CI Upper"] = ci[1] if not numpy.isnan(ci[0]) else 0
+            for i, score in enumerate(numpy.round(scores, 6)):
                 diagnostics[f"Fold {i + 1}"] = score
 
         self.result_grid_.append(pd.DataFrame(diagnostics))
@@ -613,9 +614,9 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         """
         # Estimator Check
         estimator = (
-            self.estimator.steps[-1][1]
-            if isinstance(self.estimator, Pipeline)
-            else self.estimator
+            self._estimator.steps[-1][1]
+            if isinstance(self._estimator, Pipeline)
+            else self._estimator
         )
         if not isinstance(estimator, BaseEstimator):
             raise TypeError(
@@ -635,10 +636,10 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         estimator.set_params(**self.estimator_params)
 
         # Set the parameters
-        if isinstance(self.estimator, Pipeline):
-            self.estimator.steps[-1][1].set_params(**self.estimator_params)
+        if isinstance(self._estimator, Pipeline):
+            self._estimator.steps[-1][1].set_params(**self.estimator_params)
         else:
-            self.estimator.set_params(**self.estimator_params)
+            self._estimator.set_params(**self.estimator_params)
 
     # def _allocate_cpu_resources(self, cv: int, n: int) -> Tuple[int, int]:
     #     """
@@ -699,7 +700,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         :returns: None
         """
         try:
-            self._validate_data(self.X_)
+            self._validate_data(self._X)
         except ValueError as e:
             cases = [
                 "2D",
@@ -720,13 +721,11 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
                             ("clean", SafeVarianceThreshold(threshold=0.0)),
                         ]
                     )
-                    self._validate_data(dim_comp.fit_transform(self.X_), self.y_)
+                    self._validate_data(dim_comp.fit_transform(self._X), self._y)
                     warnings.warn(
                         f"Estimator adjusted for ND data compatibility.", UserWarning
                     )
-                    self.estimator = Pipeline(
-                        [("compatibility", dim_comp), ("estimator", self.estimator)]
-                    )
+                    self._estimator = Pipeline(dim_comp.steps + self._estimator.steps)
                 except e as e:
                     raise e
 

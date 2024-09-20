@@ -119,37 +119,44 @@ class SpatialExhaustiveSearch(BaseOptimizer):
     """
 
     def __init__(
-            self,
-
-            # General and Decoder
-            dimensions: Tuple[int, ...],
-            estimator: Union[Any, Pipeline],
-            estimator_params: Optional[Dict[str, any]] = None,
-            scoring: str = 'f1_weighted',
-            cv: Union[BaseCrossValidator, int] = 10,
-            groups: Optional[numpy.ndarray] = None,
-
-            # Training Settings
-            tol: float = 1e-5,
-            patience: int = int(1e5),
-            bounds: Tuple[float, float] = (0.0, 1.0),
-            prior: Optional[numpy.ndarray] = None,
-            callback: Optional[Union[Callable, Type]] = None,
-
-            # Misc
-            n_jobs: int = 1,
-            random_state: Optional[int] = None,
-            verbose: Union[bool, int] = False
+        self,
+        # General and Decoder
+        dimensions: Tuple[int, ...],
+        estimator: Union[Any, Pipeline],
+        estimator_params: Optional[Dict[str, any]] = None,
+        scoring: str = "f1_weighted",
+        cv: Union[BaseCrossValidator, int] = 10,
+        groups: Optional[numpy.ndarray] = None,
+        # Training Settings
+        tol: float = 1e-5,
+        patience: int = int(1e5),
+        bounds: Tuple[float, float] = (0.0, 1.0),
+        prior: Optional[numpy.ndarray] = None,
+        callback: Optional[Union[Callable, Type]] = None,
+        # Misc
+        n_jobs: int = 1,
+        random_state: Optional[int] = None,
+        verbose: Union[bool, int] = False,
     ) -> None:
 
         super().__init__(
-            dimensions, estimator, estimator_params, scoring, cv, groups, tol,
-            patience, bounds, prior, callback, n_jobs, random_state, verbose
+            dimensions,
+            estimator,
+            estimator_params,
+            scoring,
+            cv,
+            groups,
+            tol,
+            patience,
+            bounds,
+            prior,
+            callback,
+            n_jobs,
+            random_state,
+            verbose,
         )
 
-    def _run(
-            self
-    ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
+    def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
         Executes the Spatial Exhaustive Search.
 
@@ -159,18 +166,25 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             A tuple with the solution, mask, the evaluation scores and the optimization history.
         """
         if len(self.dimensions) > 2:
-            raise ValueError(f'Only two dimensions are allowed. Got {len(self.dimensions)}.')
+            raise ValueError(
+                f"Only two dimensions are allowed. Got {len(self.dimensions)}."
+            )
         wait = 0
         best_score = 0.0
         best_state = None
 
         # Main loop over the number of starting positions
-        grid_dimensions = np.array(self.X_.shape)[np.array(self.dimensions)]
+        grid_dimensions = np.array(self._X.shape)[np.array(self.dimensions)]
         grid = np.arange(1, np.prod(grid_dimensions) + 1).reshape(grid_dimensions)
         subgrids = self._generate_subgrids(*grid.shape)
 
-        progress_bar = tqdm(range(len(subgrids)), desc=self.__class__.__name__, postfix=f'{best_score:.6f}',
-                            disable=not self.verbose, leave=True)
+        progress_bar = tqdm(
+            range(len(subgrids)),
+            desc=self.__class__.__name__,
+            postfix=f"{best_score:.6f}",
+            disable=not self.verbose,
+            leave=True,
+        )
         for iteration in progress_bar:
             mask = np.zeros_like(grid, dtype=bool)
             start_row, start_col, end_row, end_col = subgrids[iteration]
@@ -178,7 +192,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             # Calculate the score for the current subgrid and update if it's the best score
             if (score := self._objective_function(mask)) > best_score:
                 best_score, best_state = score, mask
-                progress_bar.set_postfix(best_score=f'{best_score:.6f}')
+                progress_bar.set_postfix(best_score=f"{best_score:.6f}")
                 if abs(best_score - score) > self.tol:
                     wait = 0
             if wait > self.patience or score >= 1.0:
@@ -191,9 +205,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         best_score *= 100
         return solution, best_state, best_score
 
-    def _handle_bounds(
-            self
-    ) -> None:
+    def _handle_bounds(self) -> None:
         """
         Placeholder method for handling bounds.
 
@@ -202,9 +214,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         :returns: None
         """
 
-    def _handle_prior(
-            self
-    ) -> None:
+    def _handle_prior(self) -> None:
         """
         Placeholder method for handling prior.
 
@@ -215,7 +225,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
     @staticmethod
     def _generate_subgrids(
-            grid_height: int, grid_width: int
+        grid_height: int, grid_width: int
     ) -> List[Tuple[int, int, int, int]]:
         """
         Generates all possible subgrids within a given grid height and width.
@@ -243,9 +253,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
                             subgrids.append((start_row, start_col, end_row, end_col))
         return subgrids
 
-    def _prepare_result_grid(
-            self
-    ) -> None:
+    def _prepare_result_grid(self) -> None:
         """
         Finalizes the result grid. For the Spatial Exhaustive Search, the height
         and width of the included area is added.
@@ -259,13 +267,22 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
 
         # Compute the height and width for each mask and assign them to the result grid
-        self.result_grid_[['Height', 'Width']] = self.result_grid_['Mask'].apply(
-            lambda mask: pd.Series(compute_subgrid_dimensions(mask.reshape(
-                tuple(np.array(self.X_.shape)[np.array(self.dimensions)]))))
+        self.result_grid_[["Height", "Width"]] = self.result_grid_["Mask"].apply(
+            lambda mask: pd.Series(
+                compute_subgrid_dimensions(
+                    mask.reshape(
+                        tuple(np.array(self._X.shape)[np.array(self.dimensions)])
+                    )
+                )
+            )
         )
 
         # Reorder the columns to place 'Height' and 'Width' after 'Size'
         columns = list(self.result_grid_.columns)
-        size_index = columns.index('Size')
-        new_order = columns[:size_index + 1] + ['Height', 'Width'] + columns[size_index + 1:-2]
+        size_index = columns.index("Size")
+        new_order = (
+            columns[: size_index + 1]
+            + ["Height", "Width"]
+            + columns[size_index + 1 : -2]
+        )
         self.result_grid_ = self.result_grid_[new_order]

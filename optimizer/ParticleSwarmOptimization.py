@@ -365,14 +365,14 @@ class ParticleSwarmOptimization(BaseOptimizer):
         # Initialize the swarm
         swarm = create_swarm(
             n_particles=self.n_particles,
-            dimensions=int(numpy.prod(self.dim_size_)),
-            bounds=self.bounds_,
+            dimensions=int(numpy.prod(self._dim_size)),
+            bounds=self._bounds,
             center=self.center,
-            init_pos=self.prior_,
+            init_pos=self._prior,
             clamp=self.velocity_clamp,
             options=options,
         )
-        swarm_size = (self.n_particles, numpy.prod(self.dim_size_))
+        swarm_size = (self.n_particles, numpy.prod(self._dim_size))
         swarm.pbest_cost = numpy.full(swarm_size[0], numpy.inf)
 
         # Populate memory of the handlers
@@ -380,11 +380,14 @@ class ParticleSwarmOptimization(BaseOptimizer):
         vh.memory = swarm.position
 
         # Setup Pool of processes for parallel evaluation
-        pool = None if self.n_jobs < 2 else multiprocessing.Pool(self.n_jobs)
+        pool = None
+        if self.n_jobs > 1:
+            self.result_grid_ = multiprocessing.Manager().list()
+            pool = multiprocessing.Pool(self.n_jobs)
         ftol_history = deque(maxlen=self.patience)
 
         # Run the search loop
-        idtr = f"{self.dims_incl_}: " if isinstance(self.dims_incl_, int) else ""
+        idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
         progress_bar = tqdm(
             range(self.n_iter),
             desc=f"{idtr}{self.__class__.__name__}",
@@ -424,9 +427,9 @@ class ParticleSwarmOptimization(BaseOptimizer):
                     break
 
             # Verify stop criteria based on the relative acceptable cost tol
-            relative_measure = self.tol_ * (1 + numpy.abs(best_cost_yet_found))
+            relative_measure = self._tol * (1 + numpy.abs(best_cost_yet_found))
             delta = numpy.abs(swarm.best_cost - best_cost_yet_found) < relative_measure
-            if self.iter_ < self.patience_:
+            if self.iter_ < self._patience:
                 ftol_history.append(delta)
             else:
                 ftol_history.append(delta)
@@ -441,13 +444,14 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
             # Perform velocity and position updates
             swarm.velocity = top.compute_velocity(
-                swarm, self.velocity_clamp, vh, self.bounds_
+                swarm, self.velocity_clamp, vh, self._bounds
             )
-            swarm.position = top.compute_position(swarm, self.bounds_, bh)
+            swarm.position = top.compute_position(swarm, self._bounds, bh)
 
         # Close Pool of Processes
         if self.n_jobs > 1:
             pool.close()
+            pool.join()
 
         # Obtain the final best_solution, best_state and best_score
         best_solution = swarm.pbest_pos  # [swarm.pbest_cost.argmin()].copy()
@@ -504,8 +508,8 @@ class ParticleSwarmOptimization(BaseOptimizer):
             particle.
         """
         return (
-            numpy.full(numpy.prod(self.dim_size_), self.bounds[0]),
-            numpy.full(numpy.prod(self.dim_size_), self.bounds[1]),
+            numpy.full(numpy.prod(self._dim_size), self.bounds[0]),
+            numpy.full(numpy.prod(self._dim_size), self.bounds[1]),
         )
 
     def _handle_prior(self) -> Optional[numpy.ndarray]:
@@ -531,13 +535,13 @@ class ParticleSwarmOptimization(BaseOptimizer):
         # If position-matrix is provided
         if isinstance(self.prior, numpy.ndarray) and self.prior.shape == (
             self.n_particles,
-            numpy.prod(self.dim_size_),
+            numpy.prod(self._dim_size),
         ):
             return self.prior
 
         # if a simple ndarray mask is provided
         if isinstance(self.prior, numpy.ndarray) and self.prior.size == numpy.prod(
-            self.dim_size_
+            self._dim_size
         ):
             gaus = numpy.abs(
                 numpy.random.normal(0, 0.06125, (self.n_particles, self.prior.size))

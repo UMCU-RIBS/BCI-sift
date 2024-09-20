@@ -184,12 +184,15 @@ class PerturbativeSearch(BaseOptimizer):
         wait = 0
         best_score = 0.0
         best_state = None
+        pool = None
 
         # Setup Pool of processes for parallel evaluation
-        pool = None if self.n_jobs < 2 else multiprocessing.Pool(self.n_jobs)
+        if self.n_jobs > 1:
+            self.result_grid_ = multiprocessing.Manager().list()
+            pool = multiprocessing.Pool(self.n_jobs)
 
         # Run search
-        idtr = f"{self.dims_incl_}: " if isinstance(self.dims_incl_, int) else ""
+        idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
         progress_bar = tqdm(
             range(self.n_iter),
             desc=f"{idtr}{self.__class__.__name__}",
@@ -199,22 +202,22 @@ class PerturbativeSearch(BaseOptimizer):
         )
         for self.iter_ in progress_bar:
             mask = np.random.uniform(
-                self.bounds_[0],
+                self._bounds[0],
                 self.bounds[1],
-                size=(int(numpy.ceil(self.n_jobs)), np.prod(self.dim_size_)),
+                size=(int(numpy.ceil(self.n_jobs)), np.prod(self._dim_size)),
             )
+            scores = self._compute_objective(self._objective_function, mask, pool)
 
             # Update logs and early stopping
             wait += 1
-            scores = self._compute_objective(self._objective_function, mask, pool)
             score = numpy.max(scores)
             if best_score < score:
-                if best_score - score > self.tol_:
+                if score - best_score > self._tol:
                     wait = 0
                 best_score = score
                 best_state = mask[scores == score]
             progress_bar.set_postfix(best_score=f"{best_score:.6f}")
-            if wait > self.patience_:
+            if wait > self._patience:
                 progress_bar.set_postfix(
                     best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
                 )
@@ -234,6 +237,7 @@ class PerturbativeSearch(BaseOptimizer):
         # Close Pool of Processes
         if self.n_jobs > 1:
             pool.close()
+            pool.join()
 
         best_solution = best_state
         best_state = best_state > 0.5

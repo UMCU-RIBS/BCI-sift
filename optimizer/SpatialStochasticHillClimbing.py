@@ -415,7 +415,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         e_min = self.epsilon[1]
         e_decay = (e - e_min) / self.n_iter
 
-        grid_dimensions = np.array(self.X_.shape)[np.array(self.dimensions)]
+        grid_dimensions = np.array(self._X.shape)[np.array(self.dimensions)]
         grid = np.arange(1, np.prod(grid_dimensions) + 1).reshape(grid_dimensions)
         init_pos = grid.flatten()
         if self.prior:
@@ -611,7 +611,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
             lambda mask: pd.Series(
                 compute_subgrid_dimensions(
                     mask.reshape(
-                        tuple(np.array(self.X_.shape)[np.array(self.dimensions)])
+                        tuple(np.array(self._X.shape)[np.array(self.dimensions)])
                     )
                 )
             )

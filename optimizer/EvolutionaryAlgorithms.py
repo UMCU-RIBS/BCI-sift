@@ -9,7 +9,7 @@
 import multiprocessing
 import random
 from numbers import Integral, Real
-from typing import Tuple, List, Union, Dict, Any, Optional, Callable, Type
+from typing import Tuple, List, Union, Dict, Any, Optional, Callable
 
 import numpy
 from deap import base, creator, tools
@@ -314,7 +314,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         patience: Union[Tuple[int, ...], int] = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
-        callback: Optional[Union[Callable, Type]] = None,
+        callback: Optional[Callable] = None,
         # Misc
         n_jobs: int = -1,
         random_state: Optional[int] = None,
@@ -377,10 +377,15 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         :return Tuple[numpy.ndarray, numpy.ndarray, float]:
             The best found solution, mask, and their fitness score.
         """
+
         # Set up EA algorithm
         toolbox, pool = self._init_toolbox()
         populations = self._initialize_population(toolbox)
         method, method_params = self._init_method()
+
+        # Setup Pool of processes for parallel evaluation
+        if self.n_jobs > 1:
+            self.result_grid_ = multiprocessing.Manager().list()
 
         # Initialize history
         stats = tools.Statistics(lambda ind: ind.fitness.values)
@@ -389,13 +394,11 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         stats.register("min", numpy.min)
         stats.register("max", numpy.max)
 
-        hof = tools.HallOfFame(
-            self.population_size * self.islands, similar=numpy.array_equal
-        )
+        hof = tools.HallOfFame(self.islands, similar=numpy.array_equal)
         best_score, wait = 0.0, 0
 
         # Run the search loop
-        idtr = f"{self.dims_incl_}: " if isinstance(self.dims_incl_, int) else ""
+        idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
         progress_bar = tqdm(
             range(self.n_gen),
             desc=f"{idtr}{self.__class__.__name__}",
@@ -422,13 +425,13 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
             # Update logs and early stopping
             wait += 1
-            score = numpy.max(log.select("max"))
+            score = log[-1]["max"]
             if best_score < score:
-                if best_score - score > self.tol_:
+                if score - best_score > self._tol:
                     wait = 0
                 best_score = score
             progress_bar.set_postfix(best_score=f"{best_score:.6f}")
-            if wait > self.patience_:
+            if wait > self._patience:
                 progress_bar.set_postfix(
                     best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
                 )
@@ -451,6 +454,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         # Close Pool of Processes
         if self.n_jobs > 1:
             pool.close()
+            pool.join()
 
         # Obtain the final best_cost and the final best_position
         best_solution = numpy.array(hof.items)
@@ -473,8 +477,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         :return: List[List[Any]]
             A population of several individuals.
         """
-        if self.prior_ is not None:
-            return self.prior_
+        if self._prior is not None:
+            return self._prior
 
         # Initialize populations for each island
         return [toolbox.population(n=self.population_size) for _ in range(self.islands)]
@@ -560,7 +564,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
         # If list of islands of DEAP Individuals is provided
         if isinstance(self.prior, list) and isinstance(self.prior[0], list):
-            if self.prior[0][0].size == (numpy.prod(self.dim_size_),) and hasattr(
+            if self.prior[0][0].size == (numpy.prod(self._dim_size),) and hasattr(
                 self.prior[0][0], "fitness"
             ):
                 return self.prior
@@ -705,11 +709,11 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         def create_individual(n):
             """Create an individual using NumPy array and assign fitness."""
             return creator.Individual(
-                numpy.random.uniform(self.bounds_[0], self.bounds_[1], n)
+                numpy.random.uniform(self._bounds[0], self._bounds[1], n)
             )
 
         # Step 2: Register the attribute, individual, and population creation functions
-        toolbox.register("individual", create_individual, numpy.prod(self.dim_size_))
+        toolbox.register("individual", create_individual, numpy.prod(self._dim_size))
         toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
         # Step 3: Register the evaluation, crossover, mutation, and selection functions
@@ -731,13 +735,13 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         # Step 4: Decorate the mate and mutate functions with clipping
         toolbox.decorate("mate",lambda func: lambda ind1, ind2, **kwargs:
         (
-            clip_individual(func(ind1, ind2, **kwargs)[0], self.bounds_[0], self.bounds_[1]),
-            clip_individual(func(ind1, ind2, **kwargs)[1], self.bounds_[0], self.bounds_[1]),
+            clip_individual(func(ind1, ind2, **kwargs)[0], self._bounds[0], self._bounds[1]),
+            clip_individual(func(ind1, ind2, **kwargs)[1], self._bounds[0], self._bounds[1]),
         ),
                          )
         toolbox.decorate("mutate",lambda func: lambda ind, **kwargs:
         (
-            clip_individual(func(ind, **kwargs)[0], self.bounds_[0], self.bounds_[1]),
+            clip_individual(func(ind, **kwargs)[0], self._bounds[0], self._bounds[1]),
         ),
                          )
         # fmt: on

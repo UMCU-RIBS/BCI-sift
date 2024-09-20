@@ -315,12 +315,12 @@ class SimulatedAnnealing(BaseOptimizer):
         Tuple[numpy.ndarray, numpy.ndarray, float]
             The best solution, mask found and their score.
         """
-        if isinstance(self.bounds_, Bounds):
+        if isinstance(self._bounds, Bounds):
             self.bounds_ = new_bounds_to_old(
-                self.bounds_.lb, self.bounds_.ub, len(self.bounds_.lb)
+                self._bounds.lb, self._bounds.ub, len(self._bounds.lb)
             )
 
-        if self.prior_ is not None and not len(self.prior_) == len(self.bounds_):
+        if self._prior is not None and not len(self._prior) == len(self.bounds_):
             raise ValueError("Bounds size does not match prior")
 
         lu = list(zip(*self.bounds_))
@@ -348,7 +348,7 @@ class SimulatedAnnealing(BaseOptimizer):
         if not len(lower) == len(upper):
             raise ValueError("Bounds do not have the same dimensions")
 
-        minimizer_kwargs = {"method": self.optimizer_method, "tol": self.tol_}
+        minimizer_kwargs = {"method": self.optimizer_method, "tol": self._tol}
 
         # Wrapper for the objective function
         func_wrapper = ObjectiveFunWrapper(
@@ -364,7 +364,7 @@ class SimulatedAnnealing(BaseOptimizer):
 
         # Initialization of the energy state
         energy_state = EnergyState(lower, upper)
-        energy_state.reset(func_wrapper, rand_state, self.prior_)
+        energy_state.reset(func_wrapper, rand_state, self._prior)
 
         # Minimum value of annealing temperature reached to perform
         # re-annealing
@@ -408,11 +408,11 @@ class SimulatedAnnealing(BaseOptimizer):
                 wait += 1
                 score = -energy_state.ebest
                 if best_score < score:
-                    if best_score - score > self.tol_:
+                    if score - best_score > self._tol:
                         wait = 0
                     best_score = score
                 progress_bar.set_postfix(best_score=f"{best_score:.6f}")
-                if wait > self.patience_:
+                if wait > self._patience:
                     progress_bar.set_postfix(
                         best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
                     )
@@ -471,7 +471,7 @@ class SimulatedAnnealing(BaseOptimizer):
         :return: List[Tuple[float, float]]
             A list of tuples representing the lower and upper bounds for each dimension.
         """
-        return [self.bounds for _ in range(numpy.prod(self.dim_size_))]
+        return [self.bounds for _ in range(numpy.prod(self._dim_size))]
 
     def _handle_prior(self) -> Optional[numpy.ndarray]:
         """
@@ -490,7 +490,7 @@ class SimulatedAnnealing(BaseOptimizer):
 
         # If energy state is provided
         if isinstance(self.prior, numpy.ndarray) and self.prior.size == numpy.prod(
-            self.dim_size_
+            self._dim_size
         ):
             if self.prior.dtype == float:
                 return self.prior

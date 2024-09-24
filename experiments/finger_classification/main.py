@@ -25,7 +25,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.svm import SVC
 
-from aux import load_raw_bids, load_info, load_markers
+from aux import load_raw_bids, load_info, load_markers, load_data_glove
 from config import update_config_from_args
 from optimizer import EvolutionaryAlgorithms, RecursiveFeatureElimination
 from optimizer import ParticleSwarmOptimization
@@ -132,7 +132,7 @@ def channel_combination_serarch(
             n_jobs=n_jobs,
             verbose=False if with_hp else True,
         ),
-        "RS": PerturbativeSearch(
+        "PS": PerturbativeSearch(
             dims,
             estimator,
             scoring=metric,
@@ -151,6 +151,7 @@ def channel_combination_serarch(
             cv=cv,
             groups=groups,
             strategy="joint",
+            step=10,
             random_state=seed,
             n_jobs=n_jobs,
             verbose=False if with_hp else True,
@@ -489,23 +490,16 @@ def main(configs):
 
     ch_info = load_info(path=f"{configs.DATA.PATH}/{configs.DATA.CH_FILENAME}")
     notch_bands = load_info(path=f"{configs.DATA.PATH}/{configs.DATA.NOTCH_FILENAME}")
-
+    data_glove = load_data_glove(path=configs.DATA.PATH)
     mom = load_markers(
         marker_path=configs.DATA.EVENT_MOM_PATH, data_path=configs.DATA.PATH
     )
-
-    if (
-        configs.DATA.PATH.split("/")[-1].split("_")[0] == "Gestures"
-        and config.EXPERIMENT.FOUR_DOF
-    ):
-        tmin, tmax = -0.5, 2.5
-    elif (
-        configs.DATA.PATH.split("/")[-1].split("_")[0] == "BoldFingers"
-        and config.EXPERIMENT.FOUR_DOF
-    ):
-        tmin, tmax = -0.5, 1.5
-    elif config.EXPERIMENT.EIGHT_DOF:
+    if config.EXPERIMENT.EIGHT_DOF:
         tmin, tmax = -0.5, 2.0
+    elif configs.DATA.PATH.split("/")[-1].split("_")[0] == "Gestures":
+        tmin, tmax = -0.5, 2.5
+    elif configs.DATA.PATH.split("/")[-1].split("_")[0] == "BoldFingers":
+        tmin, tmax = -0.5, 1.5
 
     # Iterate through your bids_ieeg_data dictionary
     for subject, session in raw.items():
@@ -532,6 +526,7 @@ def main(configs):
                     tmin=tmin,
                     tmax=tmax,
                     ch_info=ch_info,
+                    data_glove=data_glove,
                     mom=mom,
                     gms=None,
                     multi_clf="multi",

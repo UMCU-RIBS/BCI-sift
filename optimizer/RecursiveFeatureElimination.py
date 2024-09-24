@@ -13,13 +13,12 @@ from operator import attrgetter
 from typing import Tuple, Union, Dict, Optional, Any, Callable
 
 import numpy
-import numpy as np
 from sklearn import clone
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection import cross_validate, train_test_split
 from sklearn.pipeline import Pipeline
-from sklearn.utils._param_validation import StrOptions, Interval, RealNotInt
+from sklearn.utils._param_validation import Interval, RealNotInt
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
 from tqdm import tqdm
 
@@ -72,8 +71,8 @@ class RecursiveFeatureElimination(BaseOptimizer):
         * Conditional Optimization: Optimizes each feature dimension iteratively,
           building on previous results. Generally, yields better performance for large
           search spaces.
-    :param n_features_to_select: Union[float, int, string], default = "auto"
-        Proportion of features that should be reached through elimination; "auto": reduce to just one feature
+    :param n_features_to_select: Union[float, int], default = 1
+        Proportion of features that should be reached through elimination
     :param step: Union[float, int], default = 1
         Number of features to be eliminated in each step of the algorithm
     :param importance_getter: str, default = "named_steps.svc.coef_" #TODO: change default?
@@ -132,8 +131,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
     _parameter_constraints: dict = {**BaseOptimizer._parameter_constraints}
     _parameter_constraints.update(
         {
-            "n_features_to_select": [StrOptions({"gaussian"}),
-                                     Interval(RealNotInt, 0, 1, closed="right"),
+            "n_features_to_select": [Interval(RealNotInt, 0, 1, closed="right"),
                                      Interval(Integral, 0, None, closed="neither"),],
             "step": [Interval(Integral, 0, None, closed="neither"),
                      Interval(RealNotInt, 0, 1, closed="neither"),],
@@ -153,9 +151,9 @@ class RecursiveFeatureElimination(BaseOptimizer):
         groups: Optional[numpy.ndarray] = None,
         strategy: str = "conditional",
         # Recursive Feature Elimination Settings
-        n_features_to_select: Union[str, float] = "auto",
-        step: Union[str, float] = 1,
-        importance_getter: str = "named_steps.svc.coef_",
+        n_features_to_select: Union[int, float] = 1,
+        step: Union[str, float] = 1,  # TODO automatical step size
+        importance_getter: str = "named_steps.svc.coef_",  # TODO Add auto
         # Training Settings
         tol: Union[Tuple[int, ...], float] = 1e-5,
         patience: Union[Tuple[int, ...], int] = int(1e5),
@@ -190,28 +188,6 @@ class RecursiveFeatureElimination(BaseOptimizer):
         self.n_features_to_select = n_features_to_select
         self.step = step
         self.importance_getter = importance_getter
-
-    # def _objective_function(self, mask: numpy.ndarray) -> float:
-    #     """
-    #     Objective function that calculates the score to maximize.
-    #
-    #     Parameters:
-    #     -----------
-    #     :param mask: numpy.ndarray
-    #         The boolean mask indicating selected features.
-    #
-    #     Returns:
-    #     --------
-    #     :return: float
-    #         The evaluation score for the selected features, or 0 if no features
-    #         are selected.
-    #     """
-    #     X_sub = self.X_[:, mask].reshape(self.X_.shape[0], -1)
-    #
-    #     scores = self._evaluate_candidates(X_sub)
-    #     self._save_statistics(copy(mask).reshape(self.dim_size_), scores)
-    #
-    #     return scores.mean()
 
     def _evaluate_candidates(
         self, selected_features: numpy.ndarray
@@ -292,7 +268,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
             A tuple with the solution, mask, the evaluation scores and the optimization history.
         """
-        mask = np.ones(self._dim_size, dtype=bool)
+        mask = numpy.ones(self._dim_size, dtype=bool)
         getter = attrgetter(self.importance_getter)
 
         wait = 0
@@ -301,9 +277,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
         # Determine number of features to select
         n_features = mask.size
-        if self.n_features_to_select is None:
-            n_features_to_select = n_features // 2
-        elif isinstance(self.n_features_to_select, Integral):  # int
+        if isinstance(self.n_features_to_select, Integral):  # int
             n_features_to_select = self.n_features_to_select
             if n_features_to_select > n_features:
                 warnings.warn(
@@ -321,7 +295,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         else:
             step = int(self.step)
 
-        support_ = np.ones(shape=n_features, dtype=bool)
+        support_ = numpy.ones(shape=n_features, dtype=bool)
 
         # Run search
         idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
@@ -333,21 +307,23 @@ class RecursiveFeatureElimination(BaseOptimizer):
             leave=True,
         )
         for self.iter_ in progress_bar:
-            features = np.arange(support_.size)[support_]
+            features = numpy.arange(support_.size)[support_]
             score = self._objective_function(mask)
             fit_est = self._custom_store["fitted_estimators"]
 
             # Fetch and process coefficients
-            coefs = np.stack([getter(est) for est in fit_est]).reshape(
-                (len(fit_est), -1, n_features - self.iter_)
+            coefs = numpy.stack([getter(est) for est in fit_est]).reshape(
+                (len(fit_est), -1, n_features - self.iter_ * step)
             )
-            ranks = np.argsort(np.mean(coefs**2, axis=tuple(range(coefs.ndim - 1))))
+            ranks = numpy.argsort(
+                numpy.mean(coefs**2, axis=tuple(range(coefs.ndim - 1)))
+            )
 
-            weights = np.zeros((n_features,), dtype=int)
+            weights = numpy.zeros((n_features,), dtype=int)
             weights[support_] = ranks.argsort()  # the larger the better
 
             # make sure step wouldn't reduce number of features below n_target_features
-            threshold = min(step, np.sum(support_) - n_features_to_select)
+            threshold = min(step, numpy.sum(support_) - n_features_to_select)
 
             # remove the least important features from result
             support_[features[ranks][:threshold]] = False

@@ -247,7 +247,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
     Parameters:
     -----------
     :param dimensions: Tuple[int, ...]
-        A tuple of dimensions indies tc apply the feature selection onto.
+        A tuple of dimension indices to apply the feature selection onto.
         Any combination of dimensions can be specified, except for
         dimension 'zero', which represents the samples.
     :param estimator: Union[Any, Pipeline]

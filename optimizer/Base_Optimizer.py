@@ -57,7 +57,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
     Parameters:
     -----------
     :param dimensions: Tuple[int, ...]
-        A tuple of dimensions indies tc apply the feature selection onto. Any
+        A tuple of dimension indices to apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
     :param estimator: Union[Any, Pipeline]
@@ -94,8 +94,8 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         Bounds for the algorithm's parameters to optimize. Since it is a binary
         selection task, bounds are set to (0.0, 1.0).
     :param prior: numpy.ndarray, optional
-        Explicitly initialize the optimizer state. If set to None, the to be optimized
-        features are initialized randomly within the bounds.
+        Explicitly initialize the optimizer state. If set to None, the features to be 
+        optimized are initialized randomly within the bounds.
     :param callback: Callable, optional
         A callback function of the structure :code: `callback(x, f, context)`, which
         will be called at each iteration. :code: `x` and :code: `f` are the solution and

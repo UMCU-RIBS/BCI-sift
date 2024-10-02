@@ -34,8 +34,8 @@ class SimulatedAnnealing(BaseOptimizer):
     """
     This class implements an Simulated Annealing algorithm to optimize the
     selection of feature combinations by iteratively trying to improve a
-    quality. The Class rests on the shoulders :code: `dual_annealing`
-    implementation from of :code: `scipy's`(see scipys dual annealing
+    quality. The class rests on the shoulders of the :code: `dual_annealing`
+    implementation of :code: `scipy`(see scipys dual annealing
     implementation for more information). This stochastic approach derived
     from [3]_ combines the generalization of CSA (Classical Simulated
     Annealing) and FSA (Fast Simulated Annealing) [1]_ [2]_ coupled to a
@@ -86,7 +86,7 @@ class SimulatedAnnealing(BaseOptimizer):
     Parameters:
     -----------
     :param dimensions: Tuple[int, ...]
-        A tuple of dimensions indies tc apply the feature selection onto.
+        A tuple of dimension indices to apply the feature selection onto.
         Any combination of dimensions can be specified, except for dimension
         'zero', which represents the samples.
     :param estimator: Union[Any, Pipeline]
@@ -113,7 +113,7 @@ class SimulatedAnnealing(BaseOptimizer):
     :param n_iter: int, default = 1000
         The number of iterations for the simulated annealing process.
     :param optimizer_method: str, default = 'L-BFGS-B'
-        The tye of optimization method used. Valid options are:
+        The type of optimization method used. Valid options are:
         'Nelder-Mead', 'Powell’, 'CG', 'BFGS','Newton-CG', 'L-BFGS-B',
         'TNC', 'COBYLA', 'COBYQA', 'SLSQP', 'trust-constr’', 'dogleg',
         'trust-ncg', 'trust-exact', 'trust-krylov'.
@@ -130,7 +130,7 @@ class SimulatedAnnealing(BaseOptimizer):
     :param accept: float, default = -5.0
         The acceptance parameter for the annealing process.
     :param maxfun: float, default = 1e7
-        The maximum function evaluations.
+        The maximum number of function evaluations.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
         for 'patience' iterations, the optimization will stop early. If 'conditional'
@@ -437,7 +437,7 @@ class SimulatedAnnealing(BaseOptimizer):
                     need_to_stop = True
                     break
 
-                # Need a re-annealing process?
+                # Is a re-annealing process necessary?
                 if temperature < temperature_restart:
                     energy_state.reset(func_wrapper, rand_state)
                     break

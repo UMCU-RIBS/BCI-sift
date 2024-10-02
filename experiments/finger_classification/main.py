@@ -27,12 +27,15 @@ from sklearn.svm import SVC
 
 from aux import load_raw_bids, load_info, load_markers, load_data_glove
 from config import update_config_from_args
-from optimizer import EvolutionaryAlgorithms, RecursiveFeatureElimination
-from optimizer import ParticleSwarmOptimization
-from optimizer import PerturbativeSearch
-from optimizer import SimulatedAnnealing
-from optimizer import SpatialExhaustiveSearch
-from optimizer import SpatialStochasticHillClimbing
+from optimizer import (
+    EvolutionaryAlgorithms,
+    ParticleSwarmOptimization,
+    RecursiveFeatureElimination,
+    PerturbativeSearch,
+    SimulatedAnnealing,
+    SpatialExhaustiveSearch,
+    SpatialStochasticHillClimbing,
+)
 from preprocessing import GestureFingerDataProcessor, ECOGPreprocessor
 from utils.hp_tune import DecoderOptimization, PerfTimer
 

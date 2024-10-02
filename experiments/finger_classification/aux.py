@@ -223,6 +223,7 @@ def load_markers(marker_path: str, data_path: str) -> Dict[str, Dict[str, List[f
 def load_data_glove(path):
     results = {}
     data_name = path.split("/")[-1].split("_")[0].lower()
+    data_name = data_name[:-1] if data_name == "boldfingers" else data_name
     for p in os.listdir(path):
         if not p.startswith("sub") or not os.path.isdir(os.path.join(path, p)):
             continue

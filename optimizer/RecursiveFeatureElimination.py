@@ -41,13 +41,13 @@ class RecursiveFeatureElimination(BaseOptimizer):
     each feature is obtained either through any specific attribute. Then, the least
     important features are pruned from current set of features. That procedure is
     recursively repeated on the pruned set until the desired number of features to
-    select is eventually reached. The implementation is similar to scikit-learn's RFE.
+    select is eventually reached. The implementation is similar to scikit-leanr's RFE.
     For further details, consult the scikit-learn documentation.
 
     Parameters:
     -----------
     :param dimensions: Tuple[int, ...]
-        A tuple of dimension indices to apply the feature selection onto. Any
+        A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
     :param estimator: Union[Any, Pipeline]
@@ -241,6 +241,19 @@ class RecursiveFeatureElimination(BaseOptimizer):
         self._custom_store["fitted_estimators"] = result["estimator"]
         return result["test_score"], result["fit_time"], result["score_time"]
 
+    # TODO: ask Dirk how to implement this
+    def _handle_bounds(self):
+        """Method to handle bounds for feature selection."""
+        return self.bounds
+
+    # TODO: ask Dirk how to implement this
+    def _handle_prior(self):
+        """Initialize the feature mask with the prior if provided."""
+        if self.prior is not None:
+            return self.prior
+        else:
+            return None
+
     def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
         Executes the Recursive Feature Elimination
@@ -344,17 +357,3 @@ class RecursiveFeatureElimination(BaseOptimizer):
         best_solution = mask.reshape(-1).astype(float)
         best_score = best_score * 100
         return best_solution, best_state, best_score
-    
-
-    # TODO: ask Dirk how to implement this
-    def _handle_bounds(self):
-        """Method to handle bounds for feature selection."""
-        return self.bounds
-
-    # TODO: ask Dirk how to implement this
-    def _handle_prior(self):
-        """Initialize the feature mask with the prior if provided."""
-        if self.prior is not None:
-            return self.prior
-        else:
-            return None

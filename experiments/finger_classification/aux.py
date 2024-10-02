@@ -222,6 +222,7 @@ def load_markers(marker_path: str, data_path: str) -> Dict[str, Dict[str, List[f
 
 def load_data_glove(path):
     results = {}
+    data_name = path.split("/")[-1].split("_")[0].lower()
     for p in os.listdir(path):
         if not p.startswith("sub") or not os.path.isdir(os.path.join(path, p)):
             continue
@@ -232,7 +233,7 @@ def load_data_glove(path):
             if not f.endswith("dataglove_physio.tsv"):
                 continue
 
-            file_path = f"{dir_path}/{p}_ses-iemu_task-boldfinger_run-{run if run > 10 else f'0{run}'}_recording-dataglove_physio"
+            file_path = f"{dir_path}/{p}_ses-iemu_task-{data_name}_run-{run if run > 10 else f'0{run}'}_recording-dataglove_physio"
 
             data = pd.read_csv(file_path + ".tsv", sep="\t")
             with open(file_path + ".json") as f:

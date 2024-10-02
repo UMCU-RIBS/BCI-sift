@@ -30,7 +30,7 @@ class PerturbativeSearch(BaseOptimizer):
     Parameters:
     -----------
     :param dimensions: Tuple[int, ...]
-        A tuple of dimension indices to apply the feature selection onto. Any
+        A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
     :param estimator: Union[Any, Pipeline]
@@ -71,7 +71,7 @@ class PerturbativeSearch(BaseOptimizer):
         Bounds for the algorithm's parameters to optimize. Since it is a binary
         selection task, bounds are set to (0.0, 1.0).
     :param prior: numpy.ndarray, optional
-        Has no effect for this algorithm but is kept for consistency.
+        Has no effect but is kept for consistency.
     :param callback: Callable, optional
         A callback function of the structure :code: `callback(x, f, context)`, which
         will be called at each iteration. :code: `x` and :code: `f` are the solution and
@@ -255,10 +255,10 @@ class PerturbativeSearch(BaseOptimizer):
 
         Parameters
         ----------
-        :param objective_func : Callable
-            The objective function to compute scores.
         :param random_perturbations: numpy.ndarray
             The random generated perturbations.
+        :param objective_func : Callable
+            The objective function to compute scores.
         :param pool : multiprocessing.Pool, optional
             The pool to be used for parallel computation. If None, computation is done sequentially.
 

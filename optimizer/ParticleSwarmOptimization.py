@@ -80,7 +80,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
     Parameters:
     -----------
     :param dimensions: Tuple[int, ...]
-        A tuple of dimension indices to apply the feature selection onto. Any
+        A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
     :param estimator: Union[Any, Pipeline]
@@ -105,7 +105,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
           building on previous results. Generally, yields better performance for large
           search spaces.
     :param topology: str, default = 'global'
-        Valid options are 'global and 'local'.
+        Valid ovptions are 'global and 'local'.
             * Global: Uses a star-topology, where every particle compares itself with
               the best-performing particle in the swarm, whereas
             * 'Local': Uses a ring topology, where every particle compares itself only
@@ -155,7 +155,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
     :param velocity_clamp: Optional[Tuple[float, float]], optional
         A tuple specifying the minimum and maximum velocity of particles.
     :param vh_strategy: str, default = 'unmodified'
-        The strategy for the handling of the velocity of out-of-bounds particles. Valid
+        The strategy for the handeling of the velocity out-of-bounds particles. Valid
         options are 'unmodified', 'adjust', 'invert' and 'zero'.
             * Unmodified: Returns the unmodified velocites.
             * Adjust: Returns the velocity that is adjusted to be the distance between
@@ -177,8 +177,8 @@ class ParticleSwarmOptimization(BaseOptimizer):
         Bounds for the algorithm's parameters to optimize. Since it is a binary
         selection task, bounds are set to (0.0, 1.0).
     :param prior: numpy.ndarray, optional
-        Explicitly initialize the optimizer state. If set to None, the features 
-        to be optimized are initialized randomly within the bounds.
+        Explicitly initialize the optimizer state. If set to None, the to be optimized
+        features are initialized randomly within the bounds.
     :param callback: Callable, optional
         A callback function of the structure :code: `callback(x, f, context)`, which
         will be called at each iteration. :code: `x` and :code: `f` are the solution and

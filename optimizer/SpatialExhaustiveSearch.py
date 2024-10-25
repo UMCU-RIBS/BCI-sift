@@ -6,7 +6,9 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-from typing import Tuple, Union, Dict, Any, Optional, List, Callable, Type
+import multiprocessing
+from functools import partial
+from typing import Tuple, Union, Dict, Any, Optional, List, Callable
 
 import numpy
 import numpy as np
@@ -26,41 +28,51 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
     Parameters:
     -----------
+    Parameters:
+    -----------
     :param dimensions: Tuple[int, ...]
-        A tuple of dimensions indies tc apply the feature selection onto.
-        Any combination of dimensions can be specified, except for
-        dimension 'zero', which represents the samples.
+        A tuple of dimensions indies tc apply the feature selection onto. Any
+        combination of dimensions can be specified, except for dimension 'zero', which
+        represents the samples.
     :param estimator: Union[Any, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
-    :param estimator_params: Optional[Dict[str, any]], default = None
-         Optional parameters to adjust the estimator parameters.
+    :param estimator_params: Dict[str, any], optional
+        Optional parameters to adjust the estimator parameters.
     :param scoring: str, default = 'f1_weighted'
         The metric to optimize. Must be scikit-learn compatible.
-    :param cv: Union[BaseCrossValidator, int], default = 10
-        The cross-validation strategy or number of folds.
-        If an integer is passed, train_test_split() for 1 and
-        StratifiedKFold() is used for >1 as default.
-    :param groups: Optional[numpy.ndarray], default = None
-        Groups for LeaveOneGroupOut-crossvalidator
-    :param patience: int, default = 1e5
-        The number of iterations for which the objective function
-        improvement must be below tol to stop optimization.
-    :param tol: float, default = 1e-5
-        The function tolerance; if the change in the best objective value
-        is below this for 'patience' iterations, the optimization will stop early.
+    :param cv: Union[BaseCrossValidator, int, float], default = 10
+        The cross-validation strategy or number of folds. If an integer is passed,
+        :code:`train_test_split` for <1 and :code:`BaseCrossValidator` is used for >1 as
+        default. A float below 1 represents the percentage of training samples for the
+        train-test split ratio.
+    :param groups: Optional[numpy.ndarray], optional
+        Groups for a LeaveOneGroupOut generator.
+    :param strategy: str, default = "joint"
+        The strategy of optimization to apply. Valid options are: 'joint' and
+        'conditional'.
+        * Joint Optimization: Optimizes all features simultaneously. Should be only
+          selected for small search spaces.
+        * Conditional Optimization: Optimizes each feature dimension iteratively,
+          building on previous results. Generally, yields better performance for large
+          search spaces.
+    :param patience: Union[int Tuple[int, ...], default = int(1e5)
+        Patience parameter has no effect but is kept for consistency.
     :param bounds: Tuple[float, float], default = (0.0, 1.0)
-        Has no effect but is kept for consistency.
-    :param prior: Optional[numpy.ndarray], default = None
-        Has no effect but is kept for consistency.
-    :param callback: Optional[Union[Callable, Type]], default = None, #TODO add description and callback design
-    :param n_jobs: int, default = 1
-        The number of parallel jobs to run during cross-validation.
-    :param random_state: Optional[int], default = None
-        Setting a seed to fix randomness (for reproducibility).
-        Default does not use a seed.
+        Bounds parameter has no effect but is kept for consistency.
+    :param prior: numpy.ndarray, optional
+        Prior parameter has no effect but is kept for consistency.
+    :param callback: Callable, optional
+        A callback function of the structure :code: `callback(x, f, context)`, which
+        will be called at each iteration. :code: `x` and :code: `f` are the solution and
+        function value, and :code: `context` contains the diagnostics of the current
+        iteration.
+    :param n_jobs: Union[int, float], default = -1
+        The number of parallel jobs to run during cross-validation; -1 uses all cores.
+    :param random_state: int, optional
+        Random State parameter has no effect but is kept for consistency.
     :param verbose: Union[bool, int], default = False
-         If set to True, enables the output of progress status
-         during the optimization process.
+         If set to True, enables the output of progress status during the optimization
+         process.
 
     Methods:
     --------
@@ -80,14 +92,21 @@ class SpatialExhaustiveSearch(BaseOptimizer):
     - importance_plot:
         Generate and save a heatmap visualizing the importance of each channel.
 
+    Methods:
+    --------
+    - fit:
+        Fit the optimizer to the data.
+    - transform:
+        Transform the input data using the mask from the optimization process.
+
     Notes:
     ------
-    This implementation is semi-compatible with the scikit-learn
-    framework, which builds around two-dimensional feature matrices.
-    To use this transformation within a scikit-learn Pipeline, the
-    four dimensional data must eb flattened after the first dimension
-    [samples, features]. For example, scikit-learn's FunctionTransformer can
-    achieve this.
+    This implementation is semi-compatible with the scikit-learn framework, which builds
+    around two-dimensional feature matrices. To use this transformation within a
+    scikit-learn Pipeline, the four dimensional data must be flattened after the first
+    dimension [samples, features]. For example, scikit-learn's
+    :code: `FunctionTransformer` can achieve this.
+
 
     Examples:
     ---------
@@ -125,16 +144,17 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
-        cv: Union[BaseCrossValidator, int] = 10,
+        cv: Union[BaseCrossValidator, int, float] = 10,
         groups: Optional[numpy.ndarray] = None,
+        strategy: str = "joint",
         # Training Settings
-        tol: float = 1e-5,
-        patience: int = int(1e5),
+        tol: Union[Tuple[int, ...], float] = 1e-5,
+        patience: Union[Tuple[int, ...], int] = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
-        callback: Optional[Union[Callable, Type]] = None,
+        callback: Optional[Callable] = None,
         # Misc
-        n_jobs: int = 1,
+        n_jobs: int = -1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
@@ -146,6 +166,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             scoring,
             cv,
             groups,
+            strategy,
             tol,
             patience,
             bounds,
@@ -156,39 +177,100 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             verbose,
         )
 
+    @staticmethod
+    def compute_objective_function(
+        mask: numpy.ndarray, objective_func: Callable, pool: multiprocessing.Pool = None
+    ):
+        """
+        Evaluate particles using the objective function
+
+        This method evaluates each particle in the swarm according to the
+        objective function passed.
+
+        If a pool is passed, then the evaluation of the particles is done in
+        parallel using multiple processes.
+
+        Parameters
+        ----------
+        :param swarm : Swarm
+            A Swarm instance
+        :param objective_func : Callable
+            Objective function to be evaluated
+        :param pool: multiprocessing.Pool, optional
+            The pool to be used for parallel particle evaluation
+
+        Returns
+        -------
+        :return: numpy.ndarray
+            Cost-matrix for the given swarm
+        """
+        if pool is None:
+            return objective_func(mask)
+        else:
+            results = pool.map(
+                partial(objective_func),
+                numpy.array_split(mask, pool._processes),
+            )
+            return numpy.concatenate(results)
+
     def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
-        Executes the Spatial Exhaustive Search.
+        Runs the exhaustive search algorithm to optimize the feature configuration, by
+        evaluating the objective function :code:`f` for all possible feature
+        combinations.
 
         Returns:
         --------
-        :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
-            A tuple with the solution, mask, the evaluation scores and the optimization history.
+        Tuple[numpy.ndarray, numpy.ndarray, float]
+            The best solution, mask found and their score.
         """
         if len(self.dimensions) > 2:
             raise ValueError(
                 f"Only two dimensions are allowed. Got {len(self.dimensions)}."
             )
+        if self.strategy == "conditional":
+            raise ValueError(
+                f"Spatial exhaustive Search requires access to all dimensions at the"
+                f" same time, hence only joint is allowed. Got {len(self.strategy)}."
+            )
+
         wait = 0
         best_score = 0.0
         best_state = None
 
         # Main loop over the number of starting positions
-        grid_dimensions = np.array(self._X.shape)[np.array(self.dimensions)]
-        grid = np.arange(1, np.prod(grid_dimensions) + 1).reshape(grid_dimensions)
+        grid = np.arange(1, np.prod(self._dim_size) + 1).reshape(self._dim_size)
         subgrids = self._generate_subgrids(*grid.shape)
 
+        total_iterations = len(subgrids)
+        chunk_size = total_iterations // self.n_jobs
+        chunks = [
+            subgrids[i : i + chunk_size] for i in range(0, total_iterations, chunk_size)
+        ]
+
+        pool = None
+        if self.n_jobs > 1:
+            self.result_grid_ = multiprocessing.Manager().list()
+            pool = multiprocessing.Pool(self.n_jobs)
+
         progress_bar = tqdm(
-            range(len(subgrids)),
+            range(chunk_size),
             desc=self.__class__.__name__,
             postfix=f"{best_score:.6f}",
             disable=not self.verbose,
             leave=True,
         )
         for iteration in progress_bar:
-            mask = np.zeros_like(grid, dtype=bool)
-            start_row, start_col, end_row, end_col = subgrids[iteration]
-            mask[start_row:end_row, start_col:end_col] = True
+            mask = np.zeros((chunk_size, *grid.shape), dtype=bool)
+
+            for i in range(chunk_size):
+                start_row, start_col, end_row, end_col = chunks[iteration][i]
+                mask[i, start_row:end_row, start_col:end_col] = True
+
+            scores = self.compute_objective_function(
+                mask, self._objective_function, pool
+            )
+
             # Calculate the score for the current subgrid and update if it's the best score
             if (score := self._objective_function(mask)) > best_score:
                 best_score, best_state = score, mask

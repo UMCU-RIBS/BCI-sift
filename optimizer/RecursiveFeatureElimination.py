@@ -295,7 +295,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         else:
             step = int(self.step)
 
-        support_ = numpy.ones(shape=n_features, dtype=bool)
+        support = numpy.ones(shape=n_features, dtype=bool)
 
         # Run search
         idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
@@ -307,27 +307,27 @@ class RecursiveFeatureElimination(BaseOptimizer):
             leave=True,
         )
         for self.iter_ in progress_bar:
-            features = numpy.arange(support_.size)[support_]
+            features = numpy.arange(support.size)[support]
             score = self._objective_function(mask)
             fit_est = self._custom_store["fitted_estimators"]
 
             # Fetch and process coefficients
-            coefs = numpy.stack([getter(est) for est in fit_est]).reshape(
-                (len(fit_est), -1, n_features - self.iter_ * step)
-            )
+            coefs = numpy.stack([getter(est) for est in fit_est])  #'.reshape(
+            #    (len(fit_est), -1, n_features - self.iter_ * step)
+            # )
             ranks = numpy.argsort(
                 numpy.mean(coefs**2, axis=tuple(range(coefs.ndim - 1)))
             )
 
             weights = numpy.zeros((n_features,), dtype=int)
-            weights[support_] = ranks.argsort()  # the larger the better
+            weights[support] = ranks.argsort()  # the larger the better
 
             # make sure step wouldn't reduce number of features below n_target_features
-            threshold = min(step, numpy.sum(support_) - n_features_to_select)
+            threshold = min(step, numpy.sum(support) - n_features_to_select)
 
             # remove the least important features from result
-            support_[features[ranks][:threshold]] = False
-            mask = support_.reshape(mask.shape)
+            support[features[ranks][:threshold]] = False
+            mask = support.reshape(mask.shape)
 
             # Update logs and early stopping
             wait += 1
@@ -357,3 +357,33 @@ class RecursiveFeatureElimination(BaseOptimizer):
         best_solution = mask.reshape(-1).astype(float)
         best_score = best_score * 100
         return best_solution, best_state, best_score
+    #
+    # def _check_estimator_data_requirements(self) -> None:
+    #     """
+    #     Update of :code: `_check_estimator_data_requirements`, assuming that only
+    #     algorithms are used with RFE that rely on tabular data (e.g. scikit-learn-like).
+    #     Automatically adjusts the estimator to ensure compatibility.
+    #
+    #     Raises:
+    #     -------
+    #     :raise ValueError:
+    #         Automatically inserting a :code: `FlattenTransformer` and
+    #         :code: `SafeVarianceThreshold` into the pipeline, the ValueError is passed
+    #         to the User.
+    #
+    #     Returns:
+    #     --------
+    #     :returns: None
+    #     """
+    #     try:
+    #         dim_comp = Pipeline(
+    #             [
+    #                 ("flatten", FlattenTransformer()),
+    #                 ("clean", SafeVarianceThreshold(threshold=0.0)),
+    #             ]
+    #         )
+    #         self._validate_data(dim_comp.fit_transform(self._X), self._y)
+    #         warnings.warn(f"Estimator adjusted for ND data compatibility.", UserWarning)
+    #         self._estimator = Pipeline(dim_comp.steps + self._estimator.steps)
+    #     except ValueError as e:
+    #         raise e

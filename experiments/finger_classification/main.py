@@ -20,6 +20,7 @@ from sklearn.metrics import get_scorer
 from sklearn.model_selection import (
     train_test_split,
     cross_validate,
+    StratifiedKFold,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler
@@ -31,7 +32,7 @@ from optimizer import (
     EvolutionaryAlgorithms,
     ParticleSwarmOptimization,
     RecursiveFeatureElimination,
-    PerturbativeSearch,
+    RandomSearch,
     SimulatedAnnealing,
     SpatialExhaustiveSearch,
     SpatialStochasticHillClimbing,
@@ -84,31 +85,21 @@ def make_groups(y):
     return groups
 
 
+# fmt: off
+
+
 def channel_combination_serarch(
-    X,
-    y,
-    dims,
-    estimator,
-    with_hp,
-    condition,
-    metric,
-    info,
-    cv,
-    seed,
-    n_jobs,
-    output_path,
+        X,y,dims,estimator,with_hp,condition,metric,info,cv,seed,n_jobs,output_path,
 ):
-    grid = info["grid"]
-    bads = info["bads"]
-    ed = info["ed"]
-    ied = info["ied"]
+    grid, bads = info["grid"], info["bads"]
+    ed, ied = info["ed"], info["ied"]
     name = info["subject_info"]["his_id"]
 
-    groups = make_groups(y)
+    # groups = make_groups(y)
     X = X.reshape(X.shape[0], X.shape[1] * X.shape[2], X.shape[3], X.shape[4])
-    # X = np.mean(X, axis=3)
+    X = np.mean(X, axis=(2, 3))
 
-    n_cv = cv if isinstance(cv, (float, int)) else cv.get_n_splits(groups=groups)
+    n_cv = cv if isinstance(cv, (float, int)) else cv.get_n_splits()  # groups=groups)
     estimator_name = (
         estimator[-1].__class__.__name__
         if isinstance(estimator, Pipeline)
@@ -117,96 +108,44 @@ def channel_combination_serarch(
 
     opt_lib = {
         "SES": SpatialExhaustiveSearch(
-            dims,
-            estimator,
-            scoring=metric,
-            cv=cv,
-            n_jobs=n_jobs,
-            verbose=False if with_hp else True,
+            dims, estimator, scoring=metric, cv=cv, strategy="joint", n_jobs=n_jobs, verbose=False if with_hp else True
         ),
         "SSHC": SpatialStochasticHillClimbing(
-            dims,
-            estimator,
-            scoring=metric,
-            n_iter=int(len(grid.reshape(-1)) * config.SUBGRID.SSHC_FACTOR),
-            cv=cv,
-            groups=groups,
-            random_state=seed,
-            n_jobs=n_jobs,
-            verbose=False if with_hp else True,
+            dims, estimator, scoring=metric, n_iter=int(len(grid.reshape(-1)) * config.SUBGRID.SSHC_FACTOR),
+            cv=cv, random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
-        "PS": PerturbativeSearch(
-            dims,
-            estimator,
-            scoring=metric,
-            n_iter=config.SUBGRID.PS_ITER,
-            cv=cv,
-            groups=groups,
-            random_state=seed,
-            n_jobs=n_jobs,
-            verbose=False if with_hp else True,
+        "RS": RandomSearch(
+            dims, estimator, scoring=metric, n_iter=config.SUBGRID.RS_ITER, cv=cv,
+            random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "RFE": RecursiveFeatureElimination(
-            dims,
-            estimator,
-            scoring=metric,
-            n_features_to_select=config.SUBGRID.RFE_RATIO,
-            cv=cv,
-            groups=groups,
-            strategy="joint",
-            step=10,
-            random_state=seed,
-            n_jobs=n_jobs,
-            verbose=False if with_hp else True,
+            dims, estimator, scoring=metric, n_features_to_select=config.SUBGRID.RFE_RATIO, cv=cv,
+            strategy="joint", step=config.SUBGRID.RFE_STEP, random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "PSO": ParticleSwarmOptimization(
-            dims,
-            estimator,
-            scoring=metric,
-            n_iter=config.SUBGRID.PSO_ITER,
-            cv=cv,
-            groups=groups,
-            random_state=seed,
-            n_jobs=n_jobs,
-            verbose=False if with_hp else True,
+            dims, estimator, scoring=metric, n_iter=config.SUBGRID.PSO_ITER, cv=cv,
+            random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "SA": SimulatedAnnealing(
-            dims,
-            estimator,
-            scoring=metric,
-            n_iter=config.SUBGRID.SA_ITER,
-            cv=cv,
-            groups=groups,
-            random_state=seed,
-            n_jobs=n_jobs,
-            verbose=False if with_hp else True,
+            dims, estimator, scoring=metric, n_iter=config.SUBGRID.SA_ITER, cv=cv,
+            random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "EA": EvolutionaryAlgorithms(
-            dims,
-            estimator,
-            scoring=metric,
-            n_gen=config.SUBGRID.EA_ITER,
-            cv=cv,
-            groups=groups,
-            random_state=seed,
-            n_jobs=n_jobs,
-            verbose=False if with_hp else True,
+            dims, estimator, scoring=metric, n_gen=config.SUBGRID.EA_ITER, cv=cv,
+            random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
     }
 
     result_grids = []
     results = []
 
-    # fmt: off
-    for method, clf in ([
-                            ("Majority", DummyClassifier(strategy="most_frequent")),
-                            (estimator_name, estimator),
-                        ] + [(name, optimizer) for name, optimizer in opt_lib.items()]):
+    for method, clf in ([("Majority", DummyClassifier(strategy="most_frequent")), (estimator_name, estimator)]
+                        + [(name, optimizer) for name, optimizer in opt_lib.items()]):
         if method in ["Majority", estimator_name]:
             if n_cv > 1:
                 # Cross-validated scores for baselines
                 result = cross_validate(clf, X.reshape((X.shape[0], np.prod(X.shape[1:]))), y,
-                                         scoring=metric, cv=cv, groups=groups, n_jobs=n_jobs)
+                                         scoring=metric, cv=cv, n_jobs=n_jobs) #groups=groups,
                 scores, train_time, test_time = result["test_score"] * 100, result["fit_time"], result["score_time"]
                 ci = np.round(stats.t.interval(0.95, len(scores) - 1, np.mean(scores),
                                                np.std(scores) / np.sqrt(len(scores))), 3)
@@ -247,7 +186,7 @@ def channel_combination_serarch(
                 }
                 report_cv = {"95-CI Lower": best.loc[0, "95-CI Lower"] * 100, "95-CI Upper": best.loc[0, "95-CI Upper"] * 100,
                              "CV Scores": list(np.round(np.array(best.filter(like="Fold", axis=1).loc[0, :]) * 100, 3))
-                             } if cv > 1 else {}
+                             } if n_cv > 1 else {}
 
             result_grids.append(clf.result_grid_)
 
@@ -277,6 +216,7 @@ def channel_combination_serarch(
     result_grids = pd.concat(result_grids, axis=0)
     # fmt: on
     return results, result_grids
+    # fmt: on
 
 
 def experiment_four_DoF(ECOG_processor, configs, estimator, with_hp, fold_gen, ch_info):
@@ -479,10 +419,12 @@ def main(configs):
     np.random.seed(configs.SEED)
 
     global num_cpu
-    num_cpu = int(np.round(os.cpu_count() * 0.95, 0))
+    num_cpu = os.cpu_count() - 2
     print(f"\nNumber of available cpu cores: {num_cpu}")
 
-    fold_gen = config.SUBGRID.CV  # LeaveOneGroupOut()
+    fold_gen = StratifiedKFold(
+        n_splits=config.SUBGRID.CV, shuffle=True, random_state=config.SEED
+    )
 
     estimator = Pipeline([("scaler", MinMaxScaler()), ("svc", SVC(kernel="linear"))])
 

@@ -20,12 +20,14 @@ from tqdm import tqdm
 
 from optimizer.Base_Optimizer import BaseOptimizer
 
-__all__ = ["PerturbativeSearch"]
+__all__ = ["RandomSearch"]
 
 
-class PerturbativeSearch(BaseOptimizer):
+class RandomSearch(BaseOptimizer):
     """
-    RandomSearch
+    This class implements a Random Search algorithm to optimize the selection of feature
+     combinations by randomly generating solutions with regard to a predefined measure
+     of quality.
 
     Parameters:
     -----------
@@ -56,7 +58,7 @@ class PerturbativeSearch(BaseOptimizer):
           search spaces.
     :param n_iter: int, default = 100
         The number of iterations for the rand search process.
-    :param n_perturbations : int, default = 30
+    :param n_perturbations : int, default = 128
         The number of perturbations to be executed per iteration.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
@@ -135,7 +137,7 @@ class PerturbativeSearch(BaseOptimizer):
         strategy: str = "conditional",
         # Random Search Settings
         n_iter: int = 100,
-        n_perturbations: int = 20,
+        n_perturbations: int = 64,
         # Training Settings
         tol: Union[Tuple[int, ...], float] = 1e-5,
         patience: Union[Tuple[int, ...], int] = int(1e5),
@@ -184,9 +186,15 @@ class PerturbativeSearch(BaseOptimizer):
         wait = 0
         best_score = 0.0
         best_state = None
-        pool = None
+
+        mask_dim = (
+            (self._dim_size,)
+            if isinstance(self._dim_size, numpy.int64)
+            else self._dim_size
+        )
 
         # Setup Pool of processes for parallel evaluation
+        pool = None
         if self.n_jobs > 1:
             self.result_grid_ = multiprocessing.Manager().list()
             pool = multiprocessing.Pool(self.n_jobs)
@@ -204,8 +212,9 @@ class PerturbativeSearch(BaseOptimizer):
             mask = np.random.uniform(
                 self._bounds[0],
                 self.bounds[1],
-                size=(int(numpy.ceil(self.n_jobs)), np.prod(self._dim_size)),
+                size=(self.n_perturbations, *mask_dim),
             )
+
             scores = self._compute_objective(self._objective_function, mask, pool)
 
             # Update logs and early stopping
@@ -216,6 +225,7 @@ class PerturbativeSearch(BaseOptimizer):
                     wait = 0
                 best_score = score
                 best_state = mask[scores == score]
+                best_state = best_state[np.random.choice(best_state.shape[0])]
             progress_bar.set_postfix(best_score=f"{best_score:.6f}")
             if wait > self._patience:
                 progress_bar.set_postfix(
@@ -275,8 +285,8 @@ class PerturbativeSearch(BaseOptimizer):
             results = pool.map(
                 partial(objective_func),
                 numpy.array_split(
-                    random_perturbations, len(random_perturbations)
-                ),  # pool._processes),
+                    random_perturbations, random_perturbations.shape[0]
+                ),  # pool._processes
             )
             return numpy.array(results)
 

@@ -2,7 +2,7 @@ __version__ = "0.1"
 
 from .EvolutionaryAlgorithms import EvolutionaryAlgorithms
 from .ParticleSwarmOptimization import ParticleSwarmOptimization
-from .PerturbativeSearch import PerturbativeSearch
+from .RandomSearch import RandomSearch
 from .RecursiveFeatureElimination import RecursiveFeatureElimination
 from .SimulatedAnnealing import SimulatedAnnealing
 from .SpatialExhaustiveSearch import SpatialExhaustiveSearch

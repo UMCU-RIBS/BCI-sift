@@ -105,7 +105,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         * Conditional Optimization: Optimizes each feature dimension iteratively,
           building on previous results. Generally, yields better performance for large
           search spaces.
-    :param population_size: int, default = 120
+    :param population_size: int, default = 128
         The size of the population in each generation.
     :param n_gen: int, default = 100
         The number of generations over which the population evolves.
@@ -285,7 +285,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         groups: Optional[numpy.ndarray] = None,
         strategy: str = "conditional",
         # Genetic Algorithm Settings
-        population_size: int = 120,
+        population_size: int = 128,
         n_gen: int = 100,
         islands: int = 1,
         offspring_generation: str = "simple",

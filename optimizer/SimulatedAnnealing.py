@@ -316,14 +316,14 @@ class SimulatedAnnealing(BaseOptimizer):
             The best solution, mask found and their score.
         """
         if isinstance(self._bounds, Bounds):
-            self.bounds_ = new_bounds_to_old(
+            self._bounds = new_bounds_to_old(
                 self._bounds.lb, self._bounds.ub, len(self._bounds.lb)
             )
 
-        if self._prior is not None and not len(self._prior) == len(self.bounds_):
+        if self._prior is not None and not len(self._prior) == len(self._bounds):
             raise ValueError("Bounds size does not match prior")
 
-        lu = list(zip(*self.bounds_))
+        lu = list(zip(*self._bounds))
         lower = numpy.array(lu[0])
         upper = numpy.array(lu[1])
 
@@ -356,7 +356,7 @@ class SimulatedAnnealing(BaseOptimizer):
         )
 
         minimizer_wrapper = LocalSearchWrapper(
-            self.bounds_, func_wrapper, **minimizer_kwargs
+            self._bounds, func_wrapper, **minimizer_kwargs
         )
 
         # Initialization of random Generator for reproducible runs if seed provided

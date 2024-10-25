@@ -110,7 +110,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
               the best-performing particle in the swarm, whereas
             * 'Local': Uses a ring topology, where every particle compares itself only
               with its nearest-neighbours as computed by a distance metric.
-    :param n_particles: int, default = 80
+    :param n_particles: int, default = 128
         The number of particles in the swarm.
     :param n_iter: int, default = 100
         The number of iterations for the PSO process.
@@ -277,7 +277,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
         strategy: str = "conditional",
         # Particle Swarm Optimization Settings
         topology: str = "global",
-        n_particles: int = 80,
+        n_particles: int = 128,
         n_iter: int = 100,
         # Particle parameters
         c1: float = 0.5,

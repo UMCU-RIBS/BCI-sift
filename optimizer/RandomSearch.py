@@ -35,6 +35,9 @@ class RandomSearch(BaseOptimizer):
         A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
+    :param feature_space: str
+        The type of feature space required for the model architecture. Valid options
+        are: 'tensor' and 'tabular'.
     :param estimator: Union[Any, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Dict[str, any], optional
@@ -129,6 +132,7 @@ class RandomSearch(BaseOptimizer):
         self,
         # General and Decoder
         dimensions: Tuple[int, ...],
+        feature_space: str,
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
@@ -137,7 +141,7 @@ class RandomSearch(BaseOptimizer):
         strategy: str = "conditional",
         # Random Search Settings
         n_iter: int = 100,
-        n_perturbations: int = 64,
+        n_perturbations: int = 128,
         # Training Settings
         tol: Union[Tuple[int, ...], float] = 1e-5,
         patience: Union[Tuple[int, ...], int] = int(1e5),
@@ -152,6 +156,7 @@ class RandomSearch(BaseOptimizer):
 
         super().__init__(
             dimensions,
+            feature_space,
             estimator,
             estimator_params,
             scoring,
@@ -279,7 +284,14 @@ class RandomSearch(BaseOptimizer):
         """
         # If no pool is provided, compute scores sequentially
         if pool is None:
-            return numpy.array([objective_func(random_perturbations)])
+            return numpy.array(
+                [
+                    objective_func(pertubation)
+                    for pertubation in numpy.array_split(
+                        random_perturbations, random_perturbations.shape[0]
+                    )
+                ]
+            )
         else:
             # Use multiprocessing pool to compute scores in parallel
             results = pool.map(

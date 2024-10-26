@@ -36,8 +36,6 @@ from sklearn.utils._param_validation import (
 from sklearn.utils.validation import check_is_fitted
 
 from optimizer.backend._backend import (
-    FlattenTransformer,
-    SafeVarianceThreshold,
     to_string,
 )
 from utils.hp_tune import PerfTimer
@@ -60,6 +58,9 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
+    :param feature_space: str
+        The type of feature space required for the model architecture. Valid options
+        are: 'tensor' and 'tabular'.
     :param estimator: Union[Any, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Dict[str, any], optional
@@ -134,6 +135,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
 
     _parameter_constraints: dict = {
         "dims": ["array-like"],
+        "feature_space": [str],
         "estimator": [HasMethods(["fit"])],
         "estimator_params": [dict, None],
         "scoring": [StrOptions(set(get_scorer_names()))],
@@ -159,6 +161,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         self,
         # General and Decoder
         dimensions: Tuple[int, ...],
+        feature_space: str,
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
@@ -179,6 +182,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
 
         # General and Decoder
         self.dimensions = dimensions
+        self.feature_space = feature_space
         self.estimator = estimator
         self.estimator_params = estimator_params
         self.scoring = scoring
@@ -251,11 +255,12 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         )
         del X, y
 
-        if numpy.max(self.dimensions) > self._X.ndim:
+        if max(max(self.dimensions) + 1, len(self.dimensions)) > self._X.ndim:
             raise ValueError(
                 f"The parameter 'dimensions' cannot exceed the data's dimensions. "
-                f"Got {self.dimensions} with data dimension {self._X.ndim}."
+                f"Got {self.dimensions} with data dimension {self._X.shape}."
             )
+
         for param, expected_type, name in [
             (self.tol, float, "tol"),
             (self.patience, int, "patience"),
@@ -305,10 +310,20 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             else self.cv.get_n_splits(groups=self.groups)
         )
 
+        if self.feature_space == "tabular":
+            self._feature_transform = self._tabular_transform
+        elif self.feature_space == "tensor":
+            self._feature_transform = self._tensor_transform
+        else:
+            raise ValueError(
+                f"The argument feature_space must be 'tabular' or 'tensor'."
+                f" Got {self.feature_space}."
+            )
+
         self._estimator = clone(self.estimator)
         if self.estimator_params:
             self._set_estimator_params()
-        self._check_estimator_data_requirements()
+        # self._check_estimator_data_requirements()
 
         self.iter_ = 0
         self.result_grid_ = []
@@ -424,8 +439,10 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         if numpy.array(mask).dtype != bool:
             mask = numpy.array(mask) > 0.5
 
-        full_mask = self._prepare_mask(mask)
-        selected_features = self._X * full_mask.astype(int)
+        # full_mask = self._prepare_tensor_mask(mask)
+        selected_features = self._feature_transform(
+            mask
+        )  # self._X * full_mask.astype(int)
 
         scores, train_times, infer_times = self._evaluate_candidates(selected_features)
         score, train_time, infer_time = (
@@ -435,28 +452,6 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         )
         self._save_statistics(mask, scores, train_time, infer_time)
         return score
-
-    def _prepare_mask(
-        self,
-        mask: numpy.ndarray,
-    ) -> numpy.ndarray:
-        """
-        Reshapes and broadcasts a mask to match the full shape of a data tensor.
-
-        Parameters:
-        -----------
-        :param mask: numpy.ndarray
-            The mask to be reshaped and broadcasted.
-
-        Returns:
-        --------
-        :return: numpy.ndarray
-            The full mask is broadcasted to match the shape of the data tensor.
-        """
-        reshaped_mask = mask.reshape(self._dim_size)[self._slices]
-        full_mask = numpy.zeros(self._X.shape, dtype=bool)
-        full_mask[numpy.broadcast_to(reshaped_mask, full_mask.shape)] = True
-        return full_mask
 
     def _evaluate_candidates(
         self, selected_features: numpy.ndarray
@@ -512,7 +507,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             cv=self.cv,
             return_estimator=True,
             groups=self.groups,
-            n_jobs=self.n_jobs,
+            n_jobs=10,  # self.n_jobs,
         )
         return (result["test_score"], result["fit_time"], result["score_time"])
 
@@ -565,6 +560,68 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
                 diagnostics[f"Fold {i + 1}"] = score
 
         self.result_grid_.append(pd.DataFrame(diagnostics))
+
+    def _prepare_mask(
+        self,
+        mask: numpy.ndarray,
+    ) -> numpy.ndarray:
+        """
+        Reshapes and broadcasts a mask to match the full shape of a data tensor.
+
+        Parameters:
+        -----------
+        :param mask: numpy.ndarray
+            The mask to be reshaped and broadcasted.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            The full mask is broadcasted to match the shape of the data tensor.
+        """
+        reshaped_mask = mask.reshape(self._dim_size)[self._slices]
+        full_mask = numpy.zeros(self._X.shape, dtype=bool)
+        full_mask[numpy.broadcast_to(reshaped_mask, full_mask.shape)] = True
+        return full_mask
+
+    def _tabular_transform(
+        self,
+        mask: numpy.ndarray,
+    ) -> numpy.ndarray:
+        """
+        Filter and represent the data as 2-dimensional matrix (or tabular data
+        representation; typically for classical machine learning architectures).
+
+        Parameters:
+        -----------
+        :param mask: numpy.ndarray
+            The mask to filter the data.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            The filtered tablular-like matrix.
+        """
+        return self._X[self._prepare_mask(mask)].reshape(self._X.shape[0], -1)
+
+    def _tensor_transform(
+        self,
+        mask: numpy.ndarray,
+    ) -> numpy.ndarray:
+        """
+        Filter and represent the data as ndimensional tensor (typically for deep
+        learning architectures).
+
+        Parameters:
+        -----------
+        :param mask: numpy.ndarray
+            The mask to filter the data.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            The filtered data tensor.
+        """
+        return self._X * self._prepare_mask(mask).astype(int)
 
     @abstractmethod
     def _handle_bounds(self) -> NotImplementedError:
@@ -641,7 +698,11 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         else:
             self._estimator.set_params(**self.estimator_params)
 
-    # def _allocate_cpu_resources(self, cv: int, n: int) -> Tuple[int, int]:
+    # def _allocate_cpu_resources(
+    #         self,
+    #         cv: int,
+    #         n: int
+    # ) -> Tuple[int, int]:
     #     """
     #     Choose the best (ea_cores, cv_cores) pair.
     #
@@ -682,52 +743,54 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
     #
     #     return max(valid_pairs, key=lambda x: x[1])
 
-    def _check_estimator_data_requirements(self) -> None:
-        """
-        Performs a check on whether the passed estimator expects 2-dimensional data
-        representation. Automatically adjusts the estimator to ensure compatibility.
-
-        Raises:
-        -------
-        :raise ValueError:
-            If the estimator raises a `ValueError` related to dimensionality that cannot
-            be resolved by automatically inserting a :code: `FlattenTransformer` and
-            :code: `SafeVarianceThreshold` into the pipeline, the ValueError is passed
-            to the User.
-
-        Returns:
-        --------
-        :returns: None
-        """
-        try:
-            self._validate_data(self._X)
-        except ValueError as e:
-            cases = [
-                "2D",
-                "dim",
-                "dims",
-                "dimensions",
-                "dimension",
-                "dimensional",
-                "input data",
-                "input",
-                "data",
-            ]
-            if any(term in str(e).lower() for term in cases):
-                try:
-                    dim_comp = Pipeline(
-                        [
-                            ("flatten", FlattenTransformer()),
-                            ("clean", SafeVarianceThreshold(threshold=0.0)),
-                        ]
-                    )
-                    self._validate_data(dim_comp.fit_transform(self._X), self._y)
-                    warnings.warn(
-                        f"Estimator adjusted for ND data compatibility.", UserWarning
-                    )
-                    self._estimator = Pipeline(dim_comp.steps + self._estimator.steps)
-                except e as e:
-                    raise e
+    # def _check_estimator_data_requirements(
+    #         self
+    # ) -> None:
+    #     """
+    #     Performs a check on whether the passed estimator expects 2-dimensional data
+    #     representation. Automatically adjusts the estimator to ensure compatibility.
+    #
+    #     Raises:
+    #     -------
+    #     :raise ValueError:
+    #         If the estimator raises a `ValueError` related to dimensionality that cannot
+    #         be resolved by automatically inserting a :code: `FlattenTransformer` and
+    #         :code: `SafeVarianceThreshold` into the pipeline, the ValueError is passed
+    #         to the User.
+    #
+    #     Returns:
+    #     --------
+    #     :returns: None
+    #     """
+    #     try:
+    #         self._validate_data(self._X)
+    #     except ValueError as e:
+    #         cases = [
+    #             "2D",
+    #             "dim",
+    #             "dims",
+    #             "dimensions",
+    #             "dimension",
+    #             "dimensional",
+    #             "input data",
+    #             "input",
+    #             "data",
+    #         ]
+    #         if any(term in str(e).lower() for term in cases):
+    #             try:
+    #                 dim_comp = Pipeline(
+    #                     [
+    #                         ("flatten", FlattenTransformer()),
+    #                         ("clean", SafeVarianceThreshold(threshold=0.0)),
+    #                     ]
+    #                 )
+    #                 self._validate_data(dim_comp.fit_transform(self._X), self._y)
+    #                 warnings.warn(
+    #                     f"Estimator adjusted for ND data compatibility.", UserWarning
+    #                 )
+    #                 self._estimator = Pipeline(dim_comp.steps + self._estimator.steps)
+    #             except e as e:
+    #                 raise e
 
     def _prepare_result_grid(self) -> None:
         """

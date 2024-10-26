@@ -84,6 +84,9 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
+    :param feature_space: str
+        The type of feature space required for the model architecture. Valid options
+        are: 'tensor' and 'tabular'.
     :param estimator: Union[Any, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Dict[str, any], optional
@@ -278,6 +281,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         self,
         # General and Decoder
         dimensions: Tuple[int, ...],
+        feature_space: str,
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
@@ -323,6 +327,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
 
         super().__init__(
             dimensions,
+            feature_space,
             estimator,
             estimator_params,
             scoring,
@@ -702,7 +707,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         toolbox = base.Toolbox()
 
         pool = None
-        if self.n_jobs >= 2:
+        if self.n_jobs > 1:
             pool = multiprocessing.Pool(self.n_jobs)
             toolbox.register("map", pool.map)
 

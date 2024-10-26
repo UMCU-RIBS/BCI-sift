@@ -50,6 +50,9 @@ class RecursiveFeatureElimination(BaseOptimizer):
         A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
+    :param feature_space: str
+        The type of feature space required for the model architecture. Valid options
+        are: 'tensor' and 'tabular'.
     :param estimator: Union[Any, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Dict[str, any], optional
@@ -75,7 +78,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         Proportion of features that should be reached through elimination
     :param step: Union[float, int], default = 1
         Number of features to be eliminated in each step of the algorithm
-    :param importance_getter: str, default = "named_steps.svc.coef_" #TODO: change default?
+    :param importance_getter: str, default = "named_steps.svc.coef_" #TODO: change to auto see scikitlearn RFE
         String that specifies an attribute name/path for extracting feature importance
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
@@ -144,6 +147,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         self,
         # General and Decoder
         dimensions: Tuple[int, ...],
+        feature_space: str,
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
@@ -168,6 +172,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
         super().__init__(
             dimensions,
+            feature_space,
             estimator,
             estimator_params,
             scoring,
@@ -269,6 +274,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
             A tuple with the solution, mask, the evaluation scores and the optimization history.
         """
         mask = numpy.ones(self._dim_size, dtype=bool)
+        # getter = self.check_importance_getter()
         getter = attrgetter(self.importance_getter)
 
         wait = 0
@@ -312,9 +318,9 @@ class RecursiveFeatureElimination(BaseOptimizer):
             fit_est = self._custom_store["fitted_estimators"]
 
             # Fetch and process coefficients
-            coefs = numpy.stack([getter(est) for est in fit_est])  #'.reshape(
-            #    (len(fit_est), -1, n_features - self.iter_ * step)
-            # )
+            coefs = numpy.stack([getter(est) for est in fit_est]).reshape(
+                (len(fit_est), -1, n_features - self.iter_ * step)
+            )
             ranks = numpy.argsort(
                 numpy.mean(coefs**2, axis=tuple(range(coefs.ndim - 1)))
             )
@@ -357,6 +363,47 @@ class RecursiveFeatureElimination(BaseOptimizer):
         best_solution = mask.reshape(-1).astype(float)
         best_score = best_score * 100
         return best_solution, best_state, best_score
+
+    # def check_importance_getter(self) -> None:
+    #     """
+    #     Automatically retrieve the correct getter to return the coefficient of the
+    #     machine learning model.
+    #
+    #     Raises:
+    #     -------
+    #     :raise ValueError:
+    #         When importance_getter is not a callable it must be `coef_` or
+    #         `feature_importances_`,otherwise a ValueError is passed to the User.
+    #
+    #     Returns:
+    #     --------
+    #     :returns: None
+    #     """
+    #     estimator = (
+    #         self.estimator[-1]
+    #         if isinstance(self.estimator, Pipeline)
+    #         else self.estimator
+    #     )
+    #     if isinstance(self.importance_getter, str):
+    #         if self.importance_getter == "auto":
+    #             if hasattr(estimator, "coef_"):
+    #                 getter = attrgetter("coef_")
+    #             elif hasattr(estimator, "feature_importances_"):
+    #                 getter = attrgetter("feature_importances_")
+    #             else:
+    #                 raise ValueError(
+    #                     "when `importance_getter=='auto'`, the underlying "
+    #                     f"estimator {estimator.__class__.__name__} should have "
+    #                     "`coef_` or `feature_importances_` attribute. Either "
+    #                     "pass a fitted estimator to feature selector or call fit "
+    #                     "before calling transform."
+    #                 )
+    #         else:
+    #             getter = attrgetter(self.importance_getter)
+    #     elif not callable(self.importance_getter):
+    #         raise ValueError("`importance_getter` has to be a string or `callable`")
+    #     return getter
+
     #
     # def _check_estimator_data_requirements(self) -> None:
     #     """

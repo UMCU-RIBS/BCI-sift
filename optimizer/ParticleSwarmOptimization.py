@@ -83,6 +83,9 @@ class ParticleSwarmOptimization(BaseOptimizer):
         A tuple of dimensions indies tc apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
+    :param feature_space: str
+        The type of feature space required for the model architecture. Valid options
+        are: 'tensor' and 'tabular'.
     :param estimator: Union[Any, Pipeline]
         The machine learning model or pipeline to evaluate feature sets.
     :param estimator_params: Dict[str, any], optional
@@ -269,6 +272,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
         self,
         # General and Decoder
         dimensions: Tuple[int, ...],
+        feature_space: str,
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
@@ -304,6 +308,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
         super().__init__(
             dimensions,
+            feature_space,
             estimator,
             estimator_params,
             scoring,
@@ -391,7 +396,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
         progress_bar = tqdm(
             range(self.n_iter),
             desc=f"{idtr}{self.__class__.__name__}",
-            postfix=f"{-swarm.best_cost:.6f}",
+            postfix=f"{0.000000:.6f}",
             disable=not self.verbose,
             leave=True,
         )

@@ -296,3 +296,11 @@ class SafeVarianceThreshold(BaseEstimator, TransformerMixin):
         except Exception:
             # If an exception occurs, return the original input X
             return X
+
+def divide_into_parts(number, parts):
+    # Calculate the base size of each part and the remainder
+    base_size = number // parts
+    remainder = number % parts
+    # Create the list of parts
+    result = [base_size + 1] * remainder + [base_size] * (parts - remainder)
+    return result

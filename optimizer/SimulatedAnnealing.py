@@ -395,10 +395,11 @@ class SimulatedAnnealing(BaseOptimizer):
         t1 = numpy.exp((self.visit - 1) * numpy.log(2.0)) - 1.0
 
         # Run the search loop
+        idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
         progress_bar = tqdm(
             range(self.n_iter),
             desc=self.__class__.__name__,
-            postfix=f"{-best_score:.6f}",
+            postfix=f"{idtr}{self.__class__.__name__}",
             disable=not self.verbose,
             leave=True,
         )

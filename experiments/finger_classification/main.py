@@ -20,7 +20,6 @@ from sklearn.metrics import get_scorer
 from sklearn.model_selection import (
     train_test_split,
     cross_validate,
-    StratifiedKFold,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler
@@ -34,8 +33,6 @@ from optimizer import (
     RecursiveFeatureElimination,
     RandomSearch,
     SimulatedAnnealing,
-    SpatialExhaustiveSearch,
-    SpatialStochasticHillClimbing,
 )
 from preprocessing import GestureFingerDataProcessor, ECOGPreprocessor
 from utils.hp_tune import DecoderOptimization, PerfTimer
@@ -97,7 +94,7 @@ def channel_combination_serarch(
 
     # groups = make_groups(y)
     X = X.reshape(X.shape[0], X.shape[1] * X.shape[2], X.shape[3], X.shape[4])
-    X = np.mean(X, axis=(2, 3))
+    # X = np.mean(X, axis=(2, 3))
 
     n_cv = cv if isinstance(cv, (float, int)) else cv.get_n_splits()  # groups=groups)
     estimator_name = (
@@ -107,31 +104,31 @@ def channel_combination_serarch(
     )
 
     opt_lib = {
-        "SES": SpatialExhaustiveSearch(
-            dims, estimator, scoring=metric, cv=cv, strategy="joint", n_jobs=n_jobs, verbose=False if with_hp else True
-        ),
-        "SSHC": SpatialStochasticHillClimbing(
-            dims, estimator, scoring=metric, n_iter=int(len(grid.reshape(-1)) * config.SUBGRID.SSHC_FACTOR),
-            cv=cv, random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
-        ),
+        # "SES": SpatialExhaustiveSearch(
+        #     dims, estimator, scoring=metric, cv=cv, strategy="joint", n_jobs=n_jobs, verbose=False if with_hp else True
+        # ),
+        # "SSHC": SpatialStochasticHillClimbing(
+        #     dims, estimator, scoring=metric, n_iter=int(len(grid.reshape(-1)) * config.SUBGRID.SSHC_FACTOR),
+        #     cv=cv, random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
+        # ),
         "RS": RandomSearch(
-            dims, estimator, scoring=metric, n_iter=config.SUBGRID.RS_ITER, cv=cv,
+            dims, 'tabular', estimator, scoring=metric, n_iter=config.SUBGRID.RS_ITER, cv=cv,
             random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "RFE": RecursiveFeatureElimination(
-            dims, estimator, scoring=metric, n_features_to_select=config.SUBGRID.RFE_RATIO, cv=cv,
+            dims, 'tabular', estimator, scoring=metric, n_features_to_select=config.SUBGRID.RFE_RATIO, cv=cv,
             strategy="joint", step=config.SUBGRID.RFE_STEP, random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "PSO": ParticleSwarmOptimization(
-            dims, estimator, scoring=metric, n_iter=config.SUBGRID.PSO_ITER, cv=cv,
+            dims, 'tabular', estimator, scoring=metric, n_iter=config.SUBGRID.PSO_ITER, cv=cv,
             random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "SA": SimulatedAnnealing(
-            dims, estimator, scoring=metric, n_iter=config.SUBGRID.SA_ITER, cv=cv,
+            dims, 'tabular', estimator, scoring=metric, n_iter=config.SUBGRID.SA_ITER, cv=cv,
             random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "EA": EvolutionaryAlgorithms(
-            dims, estimator, scoring=metric, n_gen=config.SUBGRID.EA_ITER, cv=cv,
+            dims, 'tabular', estimator, scoring=metric, n_gen=config.SUBGRID.EA_ITER, cv=cv,
             random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
     }
@@ -422,10 +419,6 @@ def main(configs):
     num_cpu = os.cpu_count() - 2
     print(f"\nNumber of available cpu cores: {num_cpu}")
 
-    fold_gen = StratifiedKFold(
-        n_splits=config.SUBGRID.CV, shuffle=True, random_state=config.SEED
-    )
-
     estimator = Pipeline([("scaler", MinMaxScaler()), ("svc", SVC(kernel="linear"))])
 
     """Acquire data set and supplementary material"""
@@ -526,7 +519,7 @@ def main(configs):
         if config.EXPERIMENT.FOUR_DOF:
             # print(f'Commence Experiment on 4-DoF for {configs.DATA.PATH.split("/")[-1].split("_")[0]}.')
             experiment_four_DoF(
-                ECOG_processor, config, estimator, config.SUBGRID.HP, fold_gen, ch_info
+                ECOG_processor, config, estimator, config.SUBGRID.HP, config.SUBGRID.CV, ch_info
             )
         else:
             print(
@@ -537,7 +530,7 @@ def main(configs):
         if config.EXPERIMENT.EIGHT_DOF:
             # print(f'Commence Experiment on 8-DoF for all Hand Movements.')
             experiment_eight_DoF(
-                config, estimator, config.SUBGRID.HP, fold_gen, ch_info
+                config, estimator, config.SUBGRID.HP, config.SUBGRID.CV, ch_info
             )
         else:
             print(f"Experiment on 8-DoF for all Hand Movements skipped...")

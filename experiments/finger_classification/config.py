@@ -76,11 +76,11 @@ _C.EXPERIMENT.FOUR_DOF = True
 # Experiment 2: Subjects to decode. Valid options:
 # 'sub-01','sub-02', 'sub-03','sub-05','sub-06','sub-07','sub-08',
 _C.EXPERIMENT.SUBJECTS = [
-    "sub-01",
+    # "sub-01",
     # "sub-02",
     # "sub-03",
     # "sub-05",
-    # "sub-06",
+    "sub-06",
     # "sub-07",
     # "sub-08",
 ]
@@ -92,16 +92,16 @@ _C.EXPERIMENT.EIGHT_DOF = False
 # -----------------------------------------------------------------------------
 _C.SUBGRID = CN()
 # Define which classifiers to experiment with. Possible options:
-_C.SUBGRID.DIMS = (1,)  #'(2, 1, 3)  #
+_C.SUBGRID.DIMS = (2, 1, 3)  #
 # Early stopping criteria for the dimensions
 _C.SUBGRID.PATIENCE = (20, 75, 75)  # (20, 75)
 # _C.SUBGRID.CLASSIFIERS = ['base', 'lr', 'lda', 'xgb', 'svm']
 # Optimizer options: 'PS', 'SES', 'SSHC', 'RFE', 'EA', 'SA', 'PSO'
-_C.SUBGRID.OPTIMIZERS = ["RFE"]
+_C.SUBGRID.OPTIMIZERS = ["PSO"]
 # With or without hyperparameter tuning
 _C.SUBGRID.HP = False
 # Number of Crossvalidation Folds
-_C.SUBGRID.CV = 10  # 10
+_C.SUBGRID.CV = 0.8  # 10
 # Define which metric top use to evaluate the classifier.
 _C.SUBGRID.METRIC = "accuracy"
 # Number of random mask generations
@@ -118,7 +118,7 @@ _C.SUBGRID.EA_ITER = 2  # 150  # 250  # 250
 # Iterations are somewhat lower due to longer convergence time.
 _C.SUBGRID.SA_ITER = 2  # 150  # 150  # 150
 # Number of Iterations of the Particle Swarm Optimization Algorithm.
-_C.SUBGRID.PSO_ITER = 2  # 150  # 250  # 250
+_C.SUBGRID.PSO_ITER = 10  # 150  # 250  # 250
 
 # -----------------------------------------------------------------------------
 # Output Paths

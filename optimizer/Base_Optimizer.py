@@ -379,7 +379,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             self.state_.append(state)
             self.score_.append(score)
             self.mask_ *= self._prepare_mask(state.reshape(self._dim_size))
-            self._X = self.transform(X)
+            self._X = X * self.mask_
 
         self._prepare_result_grid()
         return self
@@ -405,7 +405,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         """
         check_is_fitted(self)
 
-        return X * self.mask_
+        return self._feature_transform(X)
 
     @abstractmethod
     def _run(self) -> NotImplementedError:
@@ -791,6 +791,25 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
     #                 self._estimator = Pipeline(dim_comp.steps + self._estimator.steps)
     #             except e as e:
     #                 raise e
+
+    def _update_n_iter(self, n_iter: int) -> int:
+        """
+        Updates n_iter (if present in the subclass)
+
+        Parameter:
+        ----------
+        :param n_iter: int
+            Number of maximal iterations to force convergence.
+
+        Returns:
+        --------
+        returns: None
+        """
+
+        if self.strategy == "conditional":
+            n_iter = int(n_iter / len(self.dimensions))
+            return n_iter if n_iter > 0 else 1
+        return n_iter
 
     def _prepare_result_grid(self) -> None:
         """

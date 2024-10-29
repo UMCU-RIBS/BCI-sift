@@ -234,9 +234,30 @@ def cross_validate(
 
     # We clone the estimator to make sure that all the folds are
     # independent, and that it is pickle-able.
-    results = ray.get(
-        [
-            _remote_fit_and_score.remote(
+
+    if n_jobs > 1:
+        results = ray.get(
+            [
+                _remote_fit_and_score.remote(
+                    clone(estimator),
+                    X,
+                    y,
+                    scorers,
+                    train,
+                    test,
+                    verbose,
+                    fit_params,
+                    return_train_score=return_train_score,
+                    return_times=True,
+                    return_estimator=return_estimator,
+                    error_score=error_score,
+                )
+                for train, test in indices
+            ]
+        )
+    else:
+        results = [
+            _fit_and_score(
                 clone(estimator),
                 X,
                 y,
@@ -252,7 +273,6 @@ def cross_validate(
             )
             for train, test in indices
         ]
-    )
 
     _warn_or_raise_about_fit_failures(results, error_score)
 

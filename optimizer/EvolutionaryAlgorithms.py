@@ -24,7 +24,7 @@ from .Base_Optimizer import BaseOptimizer
 
 __all__ = ["EvolutionaryAlgorithms"]
 
-creator.create("FitnessMax", base.Fitness, weights=[1.0])
+creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 creator.create("Individual", numpy.ndarray, fitness=creator.FitnessMax)
 
 

@@ -13,6 +13,7 @@ from operator import attrgetter
 from typing import Tuple, Union, Dict, Optional, Any, Callable
 
 import numpy
+import ray
 from sklearn import clone
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import BaseCrossValidator
@@ -273,13 +274,19 @@ class RecursiveFeatureElimination(BaseOptimizer):
         :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
             A tuple with the solution, mask, the evaluation scores and the optimization history.
         """
+
+        wait = 0
+        self.iter_ = 0
+        best_score = 0.0
+        best_state = None
+
+        # Setup Pool of processes for parallel evaluation
+        if self.n_jobs > 1:
+            ray.init(num_cpus=self.n_jobs)
+
         mask = numpy.ones(self._dim_size, dtype=bool)
         # getter = self.check_importance_getter()
         getter = attrgetter(self.importance_getter)
-
-        wait = 0
-        best_score = 0.0
-        best_state = None
 
         # Determine number of features to select
         n_features = mask.size
@@ -359,6 +366,10 @@ class RecursiveFeatureElimination(BaseOptimizer):
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )
                     break
+
+        # Close Pool of Processes
+        if self.n_jobs > 1:
+            ray.shutdown()
 
         best_solution = mask.reshape(-1).astype(float)
         best_score = best_score * 100

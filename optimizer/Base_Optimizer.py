@@ -14,6 +14,7 @@ from typing import Tuple, Union, Dict, Any, Optional, Type, Callable
 
 import numpy
 import pandas as pd
+import ray
 from scipy import stats
 from sklearn.base import (
     TransformerMixin,
@@ -23,7 +24,7 @@ from sklearn.base import (
     _fit_context,
 )
 from sklearn.metrics import get_scorer, get_scorer_names
-from sklearn.model_selection import BaseCrossValidator, cross_validate
+from sklearn.model_selection import BaseCrossValidator  # , cross_validate
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.utils._param_validation import (
@@ -35,9 +36,11 @@ from sklearn.utils._param_validation import (
 )
 from sklearn.utils.validation import check_is_fitted
 
+from optimizer.backend import ListManager
 from optimizer.backend._backend import (
     to_string,
 )
+from optimizer.backend._trainer import cross_validate
 from utils.hp_tune import PerfTimer
 
 __all__ = []
@@ -328,6 +331,11 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         self.iter_ = 0
         self.result_grid_ = []
 
+        # Setup Pool of processes for parallel evaluation
+        if self.n_jobs > 1:
+            ray.init(num_cpus=self.n_jobs)
+            self.result_grid_ = ListManager.remote()
+
         return (
             self.fit_joint()
             if self.strategy == "joint"
@@ -352,6 +360,11 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         self.mask_ = self._prepare_mask(self.state_.reshape(self._dim_size))
 
         self._prepare_result_grid()
+
+        # Close Pool of Processes
+        if self.n_jobs > 1:
+            ray.shutdown()
+
         return self
 
     def fit_conditional(self, X: numpy.ndarray) -> Type["BaseOptimizer"]:
@@ -382,6 +395,10 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             self._X = X * self.mask_
 
         self._prepare_result_grid()
+
+        # Close Pool of Processes
+        if self.n_jobs > 1:
+            ray.shutdown()
         return self
 
     def transform(
@@ -507,7 +524,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             cv=self.cv,
             return_estimator=True,
             groups=self.groups,
-            n_jobs=10,  # self.n_jobs,
+            n_jobs=self.n_jobs,  # self.n_jobs,
         )
         return (result["test_score"], result["fit_time"], result["score_time"])
 
@@ -559,7 +576,10 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             for i, score in enumerate(numpy.round(scores, 6)):
                 diagnostics[f"Fold {i + 1}"] = score
 
-        self.result_grid_.append(pd.DataFrame(diagnostics))
+        if self.n_jobs > 1:
+            self.result_grid_.append.remote(pd.DataFrame(diagnostics))
+        else:
+            self.result_grid_.append(pd.DataFrame(diagnostics))
 
     def _prepare_mask(
         self,
@@ -819,7 +839,10 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         --------
         returns: None
         """
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
+        if self.n_jobs > 1:
+            self.result_grid_ = pd.concat(ray.get(self.result_grid_.get.remote()), axis=0, ignore_index=True)
+        else:
+            self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
 
 
 # Apply the sigmoid function to the mask

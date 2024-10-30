@@ -6,12 +6,12 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-import multiprocessing
 import random
 from numbers import Integral, Real
 from typing import Tuple, List, Union, Dict, Any, Optional, Callable
 
 import numpy
+import ray
 from deap import base, creator, tools
 from deap.algorithms import eaSimple, eaMuCommaLambda, eaMuPlusLambda
 from numba import njit
@@ -384,13 +384,9 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         """
 
         # Set up EA algorithm
-        toolbox, pool = self._init_toolbox()
+        toolbox = self._init_toolbox()
         populations = self._initialize_population(toolbox)
         method, method_params = self._init_method()
-
-        # Setup Pool of processes for parallel evaluation
-        if self.n_jobs > 1:
-            self.result_grid_ = multiprocessing.Manager().list()
 
         # Initialize history
         stats = tools.Statistics(lambda ind: ind.fitness.values)
@@ -405,7 +401,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         # Run the search loop
         idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
         progress_bar = tqdm(
-            range(self.n_gen),
+            range(self._update_n_iter(self.n_gen)),
             desc=f"{idtr}{self.__class__.__name__}",
             postfix=f"{best_score:.6f}",
             disable=not self.verbose,
@@ -456,10 +452,6 @@ class EvolutionaryAlgorithms(BaseOptimizer):
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )
                     break
-        # Close Pool of Processes
-        if self.n_jobs > 1:
-            pool.close()
-            pool.join()
 
         # Obtain the final best_cost and the final best_position
         best_solution = numpy.array(hof.items)
@@ -515,24 +507,6 @@ class EvolutionaryAlgorithms(BaseOptimizer):
                 for emigrant in emigrants:
                     islands[i].remove(emigrant)
         return islands
-
-    def objective_function_wrapper(self, mask: numpy.ndarray) -> List[float]:
-        """
-        Wraps the objective function to adapt it for compatibility with the evolutionary
-        algorithm framework.
-
-        Parameters:
-        -----------
-        :params mask: numpy.ndarray
-            A boolean array indicating which features are included in the subset.
-
-        Returns:
-        --------
-        :return List[float]
-            A list containing the objective function's score for the provided mask. Must
-            have the same size as weights of the fitness function (e.g. size of one).
-        """
-        return [self._objective_function(mask)]
 
     def _handle_bounds(self) -> Tuple[float, float]:
         """
@@ -596,6 +570,25 @@ class EvolutionaryAlgorithms(BaseOptimizer):
             f"expected dimensions or a list of lists containing individuals "
             f"with a fitness attribute."
         )
+
+    def objective_function_wrapper(self, individual: numpy.ndarray) -> Tuple[float,]:
+        """
+        Wraps the objective function to adapt it for compatibility with the evolutionary
+        algorithm framework.
+
+        Parameters:
+        -----------
+        :params individual: numpy.ndarray
+            An individual containing a boolean array indicating which features are
+             included in the subset.
+
+        Returns:
+        --------
+        :return Tuple[float]
+            A tuple containing the objective function's score for the provided mask. Must
+            have the same size as weights of the fitness function (e.g. size of one).
+        """
+        return (self._objective_function(individual),)
 
     def _init_method(self) -> Tuple[Callable, Dict[str, Any]]:
         """
@@ -706,10 +699,8 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         # Step 1: Initialize the toolbox
         toolbox = base.Toolbox()
 
-        pool = None
         if self.n_jobs > 1:
-            pool = multiprocessing.Pool(self.n_jobs)
-            toolbox.register("map", pool.map)
+            toolbox.register("map", parallel_map)
 
         def create_individual(n):
             """Create an individual using NumPy array and assign fitness."""
@@ -750,4 +741,12 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         ),
                          )
         # fmt: on
-        return toolbox, pool
+        return toolbox
+
+@ray.remote
+def remote_map(func, inv):
+    return func(inv)
+
+
+def parallel_map(func, inv):
+    return ray.get([remote_map.remote(func, i) for i in inv])

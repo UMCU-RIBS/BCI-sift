@@ -315,4 +315,4 @@ class RandomSearch(BaseOptimizer):
         :return: numpy.ndarray
             The mask performanc score.
         """
-        return self._objective_function(x)
+        return self._objective_function(mask)

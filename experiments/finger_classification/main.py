@@ -20,6 +20,7 @@ from sklearn.metrics import get_scorer
 from sklearn.model_selection import (
     train_test_split,
     cross_validate,
+    StratifiedKFold,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import MinMaxScaler
@@ -135,9 +136,11 @@ def channel_combination_serarch(
 
     result_grids = []
     results = []
+    models = []
 
     for method, clf in ([("Majority", DummyClassifier(strategy="most_frequent")), (estimator_name, estimator)]
                         + [(name, optimizer) for name, optimizer in opt_lib.items()]):
+
         if method in ["Majority", estimator_name]:
             if n_cv > 1:
                 # Cross-validated scores for baselines
@@ -146,9 +149,9 @@ def channel_combination_serarch(
                 scores, train_time, test_time = result["test_score"] * 100, result["fit_time"], result["score_time"]
                 ci = np.round(stats.t.interval(0.95, len(scores) - 1, np.mean(scores),
                                                np.std(scores) / np.sqrt(len(scores))), 3)
-                report_base = {"Mean": np.round(np.mean(scores), 3), "Median": np.round(np.median(scores), 3),
-                               "SD": np.round(np.std(scores), 3), "Train Time": np.round(np.mean(train_time), 6),
-                               "Infer Time": np.round(np.mean(test_time), 6)}
+                report_base = {"Method": clf.__class__.__name__, "Metric:": metric, "Condition": condition,
+                               "Mean": np.round(np.mean(scores), 3), "Median": np.round(np.median(scores), 3), "SD": np.round(np.std(scores), 3),
+                               "Train Time": np.round(np.mean(train_time), 6), "Infer Time": np.round(np.mean(test_time), 6)}
                 report_cv = {"95-CI Lower": ci[0], "95-CI Upper": ci[1], "CV Scores": list(np.round(scores, 3))}
             else:
                 # Train-test split for baselines
@@ -157,7 +160,8 @@ def channel_combination_serarch(
                     clf.fit(X_train, y_train)
                 with PerfTimer() as inference_timer:
                     score = get_scorer(metric)(clf, X_test, y_test) * 100
-                report_base = {"Mean": score, "Median": score, "SS": 0.0,
+                report_base = {"Method": clf.__class__.__name__, "Metric:": metric, "Condition": condition,
+                               "Mean": score,  "Median": score, "SS": 0.0,
                                "Train Time": np.round(train_timer.duration, 6),
                                "Infer Time": np.round(inference_timer.duration, 6)}
                 report_cv = {}
@@ -177,8 +181,8 @@ def channel_combination_serarch(
                 clf.fit(X, y)
                 best = clf.result_grid_[clf.result_grid_["Mean"] == clf.result_grid_["Mean"].max()].reset_index()
                 report_base = {
-                    "Method": best.loc[0, "Method"], "Mean": best.loc[0, "Mean"] * 100,
-                    "Median": best.loc[0, "Median"] * 100, "SD": best.loc[0, "SD"] * 100,
+                    "Method": best.loc[0, "Method"], "Metric:": metric, "Condition": condition,
+                    "Mean": best.loc[0, "Mean"] * 100, "Median": best.loc[0, "Median"] * 100, "SD": best.loc[0, "SD"] * 100,
                     "Train Time": best.loc[0, "Train Time"], "Infer Time": best.loc[0, "Infer Time"]
                 }
                 report_cv = {"95-CI Lower": best.loc[0, "95-CI Lower"] * 100, "95-CI Upper": best.loc[0, "95-CI Upper"] * 100,
@@ -186,6 +190,7 @@ def channel_combination_serarch(
                              } if n_cv > 1 else {}
 
             result_grids.append(clf.result_grid_)
+
 
             # # Generate and save plots
             # if len(dims) == 2:
@@ -208,15 +213,15 @@ def channel_combination_serarch(
         # Common report fields for both baselines and optimizers
         report = {"Method": method, "Dimensions": str(dims), "Subject": name, "Condition": condition, "Metric": metric}
         results.append({**report, **report_base, **report_cv})
+        models.append({method: clf})
 
     # Concatenate all results
     result_grids = pd.concat(result_grids, axis=0)
-    # fmt: on
-    return results, result_grids
+    return results, result_grids, models
     # fmt: on
 
 
-def experiment_four_DoF(ECOG_processor, configs, estimator, with_hp, fold_gen, ch_info):
+def experiment_four_DoF(ECOG_processor, configs, estimator, ch_info):
     # Channel combinator results for each subject
     comb_results_multi = []
 
@@ -266,149 +271,199 @@ def experiment_four_DoF(ECOG_processor, configs, estimator, with_hp, fold_gen, c
         info["ied"] = ch_info.loc[info["subject_info"]["his_id"], "IED"]
         info["ed"] = ch_info.loc[info["subject_info"]["his_id"], "ED"]
 
-        ch_comb_results, result_grid = channel_combination_serarch(
-            X=X,
-            y=y,
-            dims=config.SUBGRID.DIMS,
-            estimator=estimator,
-            with_hp=with_hp,
-            condition=clf_class,
-            metric=config.SUBGRID.METRIC,
-            info=info,
-            cv=fold_gen,
-            seed=config.SEED,
-            n_jobs=num_cpu,
-            output_path=out_path_clf,
-        )
-        comb_results_multi += ch_comb_results
+        if config.SUBGRID.OUTER_CV > 1:
+            outer_cv = StratifiedKFold(n_splits=config.SUBGRID.OUTER_CV, shuffle=True, random_state=config.SEED)
 
-        # Save results to a Channel Combination analytics to a csv
-        ch_combo_df = pd.DataFrame(comb_results_multi)
-        dimensions_file = "_".join(str(d) for d in config.SUBGRID.DIMS)
-        ch_combo_df[ch_combo_df["Condition"] == clf_class].to_csv(
-            f"{out_path_clf}/_global_channel_optimization_results_dim_{dimensions_file}.csv",
-            index=False,
-        )
-        pd.DataFrame(result_grid).to_csv(
-            f'{out_path_clf}/{info["subject_info"]["his_id"]}_dim_{dimensions_file}_full_result_table.csv',
-            index=False,
-        )
+            for idx, (train_idx, test_idx) in enumerate(outer_cv.split(X, y)):
+                print(f"Commence Experiment on fold {idx}")
+                X_train, X_test = X[train_idx], X[test_idx]
+                y_train, y_test = y[train_idx], y[test_idx]
 
+                # Trainings phase
+                ch_comb_results, result_grid, models = channel_combination_serarch(
+                    X=X_train,
+                    y=y_train,
+                    dims=config.SUBGRID.DIMS,
+                    estimator=estimator,
+                    with_hp=config.SUBGRID.HP,
+                    condition=clf_class,
+                    metric=config.SUBGRID.METRIC,
+                    info=info,
+                    cv=config.SUBGRID.INNER_CV,
+                    seed=config.SEED,
+                    n_jobs=num_cpu,
+                    output_path=out_path_clf,
+                )
+                comb_results_multi += ch_comb_results
 
-def experiment_eight_DoF(configs, estimator, with_hp, fold_gen, ch_info):
-    # Channel combination results for each subject
-    comb_results_multi = []
+                # Save results to a Channel Combination analytics to a csv
+                ch_combo_df = pd.DataFrame(comb_results_multi)
+                dimensions_file = "_".join(str(d) for d in config.SUBGRID.DIMS)
+                ch_combo_df[ch_combo_df["Condition"] == clf_class].to_csv(
+                    f"{out_path_clf}/_trainings_fold_{idx}_global_channel_optimization_results_dim_{dimensions_file}.csv",
+                    index=False,
+                )
+                pd.DataFrame(result_grid).to_csv(
+                    f'{out_path_clf}/{info["subject_info"]["his_id"]}_trainings_fold_{idx}_dim_{dimensions_file}_full_result_table.csv',
+                    index=False,
+                )
 
-    clf_class = "8-DoF"
-    print(
-        f"\n---------------------------------------------------------------------------------",
-        f'\n   Commence Experiment on {clf_class} for {configs.DATA.PATH.split("/")[-1].split("_")[0]}.',
-        f"\n---------------------------------------------------------------------------------",
-    )
+                # Testings phase
+                for name, clf in models:
+                    if hasattr(clf, "mask_"):
+                        X_test_transformed = clf.transform(X_test)
+                    score = get_scorer(config.SUBGRID.METRIC)(estimator, X_test_transformed, y_test)
+                    results = pd.DataFrame([{"Method": clf.__class__.__name__, "Metric": config.SUBGRID.METRIC, "Condition": clf_class, "Score": score}])
 
-    # Make Directory for the classification-type-specific output for three classes.
-    data_paths = [f"./output/Gestures_20230717/", f"./output/BoldFingers_20230717/"]
-    out_path_clf = f'./output/{configs.DATA.PATH.split("/")[-1]}/out_model_{clf_class}'
-    os.makedirs(out_path_clf, exist_ok=True)
-
-    try:
-        multi_8 = {}
-        for data, subs, type in zip(
-            data_paths, [["01", "04", "05"], ["01", "06", "08"]], ["gesture", "finger"]
-        ):
-            # Filter files that are pickled and load the corresponding subjects
-            filtered_files = sorted(
-                [
-                    file
-                    for file in os.listdir(data)
-                    if file.endswith("_2.0.pkl")
-                    and (subs[0] in file or subs[1] in file or subs[2] in file)
-                ]
+                    # Save results to a Channel Combination analytics to a csv
+                    results.to_csv(
+                        f"{out_path_clf}/_test_fold_{idx}_global_channel_optimization_results_dim_{dimensions_file}.csv",
+                        index=False,
+                    )
+        else:
+            ch_comb_results, result_grid, models = channel_combination_serarch(
+                X=X,
+                y=y,
+                dims=config.SUBGRID.DIMS,
+                estimator=estimator,
+                with_hp=config.SUBGRID.HP,
+                condition=clf_class,
+                metric=config.SUBGRID.METRIC,
+                info=info,
+                cv=config.SUBGRID.INNER_CV,
+                seed=config.SEED,
+                n_jobs=num_cpu,
+                output_path=out_path_clf,
             )
+            comb_results_multi += ch_comb_results
 
-            # Load pickle files into memory
-            for idx, file in enumerate(filtered_files):
-                file_path = os.path.join(data, file)
-                with open(file_path, "rb") as f:
-                    multi_8[type + "_" + subs[idx]] = pickle.load(f)
-        mels_rooi_habe = (
-            [multi_8["gesture_01"], multi_8["finger_06"]],
-            [multi_8["gesture_04"], multi_8["finger_01"]],
-            [multi_8["gesture_05"], multi_8["finger_08"]],
-        )
-    except:
-        raise RuntimeError(
-            f"8-DoF setting was selected but not all "
-            f"relevant subjects of the two data sets were preprocessed!"
-        )
-
-    for idx, sub in enumerate(mels_rooi_habe):
-        # if idx != 3:
-        #     continue
-        X_G, y_G, info_G = sub[0].get_mne_data(
-            conditions=[item for item in sub[0].trial_types_],
-            get_raw=False,
-            to_grid=True,
-        )
-        X_F, y_F, info_F = sub[1].get_mne_data(
-            conditions=[item for item in sub[1].trial_types_],
-            get_raw=False,
-            to_grid=True,
-        )
-        y_G += 3
-        y_F[y_F == 2], y_F[y_F == 3] = 7, 2
-
-        info = info_F
-        if configs.DATA.PATH.split("/")[-1].split("_")[0] == "Gestures":
-            info = info_G
-
-        X, y = np.concatenate((X_F, X_G), axis=0), np.concatenate((y_F, y_G), axis=0)
-        info["labels"] = [
-            "Index",
-            "Little",
-            "Thumb",
-            "Gesture D",
-            "Gesture F",
-            "Gesture V",
-            "Gesture Y",
-            "Rest",
-        ]
-
-        print(
-            f'\n Starting Experiment 2. Subgrid Search of {info["subject_info"]["his_id"]} for {clf_class} in {configs.DATA.PATH.split("/")[-1].split("_")[0]} ...'
-        )
-
-        info["ied"] = ch_info.loc[info["subject_info"]["his_id"], "IED"]
-        info["ed"] = ch_info.loc[info["subject_info"]["his_id"], "ED"]
-
-        ch_comb_results, result_grid = channel_combination_serarch(
-            X=X,
-            y=y,
-            dims=config.SUBGRID.DIMS,
-            estimator=estimator,
-            with_hp=with_hp,
-            condition=clf_class,
-            metric=config.SUBGRID.METRIC,
-            info=info,
-            cv=fold_gen,
-            seed=config.SEED,
-            n_jobs=num_cpu,
-            output_path=out_path_clf,
-        )
-        comb_results_multi += ch_comb_results
-
-        # Save results to a Channel Combination analytics to a csv
-        ch_combo_df = pd.DataFrame(comb_results_multi)
-        ch_combo_df[ch_combo_df["Condition"] == clf_class].to_csv(
-            f"{out_path_clf}/Subgrid/global_channel_optimization_results_.csv",
-            index=False,
-        )
-
-        with open(
-            f'{out_path_clf}/Subgrid/{info["subject_info"]["his_id"]}_spatial_channel_optimization_results.sav',
-            "wb",
-        ) as f:
-            pickle.dump(pd.DataFrame(result_grid), f)
+            # Save results to a Channel Combination analytics to a csv
+            ch_combo_df = pd.DataFrame(comb_results_multi)
+            dimensions_file = "_".join(str(d) for d in config.SUBGRID.DIMS)
+            ch_combo_df[ch_combo_df["Condition"] == clf_class].to_csv(
+                f"{out_path_clf}/_global_channel_optimization_results_dim_{dimensions_file}.csv",
+                index=False,
+            )
+            pd.DataFrame(result_grid).to_csv(
+                f'{out_path_clf}/{info["subject_info"]["his_id"]}_dim_{dimensions_file}_full_result_table.csv',
+                index=False,
+            )
+#
+#
+# def experiment_eight_DoF(configs, estimator, with_hp, fold_gen, ch_info):
+#     # Channel combination results for each subject
+#     comb_results_multi = []
+#
+#     clf_class = "8-DoF"
+#     print(
+#         f"\n---------------------------------------------------------------------------------",
+#         f'\n   Commence Experiment on {clf_class} for {configs.DATA.PATH.split("/")[-1].split("_")[0]}.',
+#         f"\n---------------------------------------------------------------------------------",
+#     )
+#
+#     # Make Directory for the classification-type-specific output for three classes.
+#     data_paths = [f"./output/Gestures_20230717/", f"./output/BoldFingers_20230717/"]
+#     out_path_clf = f'./output/{configs.DATA.PATH.split("/")[-1]}/out_model_{clf_class}'
+#     os.makedirs(out_path_clf, exist_ok=True)
+#
+#     try:
+#         multi_8 = {}
+#         for data, subs, type in zip(
+#             data_paths, [["01", "04", "05"], ["01", "06", "08"]], ["gesture", "finger"]
+#         ):
+#             # Filter files that are pickled and load the corresponding subjects
+#             filtered_files = sorted(
+#                 [
+#                     file
+#                     for file in os.listdir(data)
+#                     if file.endswith("_2.0.pkl")
+#                     and (subs[0] in file or subs[1] in file or subs[2] in file)
+#                 ]
+#             )
+#
+#             # Load pickle files into memory
+#             for idx, file in enumerate(filtered_files):
+#                 file_path = os.path.join(data, file)
+#                 with open(file_path, "rb") as f:
+#                     multi_8[type + "_" + subs[idx]] = pickle.load(f)
+#         mels_rooi_habe = (
+#             [multi_8["gesture_01"], multi_8["finger_06"]],
+#             [multi_8["gesture_04"], multi_8["finger_01"]],
+#             [multi_8["gesture_05"], multi_8["finger_08"]],
+#         )
+#     except:
+#         raise RuntimeError(
+#             f"8-DoF setting was selected but not all "
+#             f"relevant subjects of the two data sets were preprocessed!"
+#         )
+#
+#     for idx, sub in enumerate(mels_rooi_habe):
+#         # if idx != 3:
+#         #     continue
+#         X_G, y_G, info_G = sub[0].get_mne_data(
+#             conditions=[item for item in sub[0].trial_types_],
+#             get_raw=False,
+#             to_grid=True,
+#         )
+#         X_F, y_F, info_F = sub[1].get_mne_data(
+#             conditions=[item for item in sub[1].trial_types_],
+#             get_raw=False,
+#             to_grid=True,
+#         )
+#         y_G += 3
+#         y_F[y_F == 2], y_F[y_F == 3] = 7, 2
+#
+#         info = info_F
+#         if configs.DATA.PATH.split("/")[-1].split("_")[0] == "Gestures":
+#             info = info_G
+#
+#         X, y = np.concatenate((X_F, X_G), axis=0), np.concatenate((y_F, y_G), axis=0)
+#         info["labels"] = [
+#             "Index",
+#             "Little",
+#             "Thumb",
+#             "Gesture D",
+#             "Gesture F",
+#             "Gesture V",
+#             "Gesture Y",
+#             "Rest",
+#         ]
+#
+#         print(
+#             f'\n Starting Experiment 2. Subgrid Search of {info["subject_info"]["his_id"]} for {clf_class} in {configs.DATA.PATH.split("/")[-1].split("_")[0]} ...'
+#         )
+#
+#         info["ied"] = ch_info.loc[info["subject_info"]["his_id"], "IED"]
+#         info["ed"] = ch_info.loc[info["subject_info"]["his_id"], "ED"]
+#
+#         ch_comb_results, result_grid = channel_combination_serarch(
+#             X=X,
+#             y=y,
+#             dims=config.SUBGRID.DIMS,
+#             estimator=estimator,
+#             with_hp=with_hp,
+#             condition=clf_class,
+#             metric=config.SUBGRID.METRIC,
+#             info=info,
+#             cv=fold_gen,
+#             seed=config.SEED,
+#             n_jobs=num_cpu,
+#             output_path=out_path_clf,
+#         )
+#         comb_results_multi += ch_comb_results
+#
+#         # Save results to a Channel Combination analytics to a csv
+#         ch_combo_df = pd.DataFrame(comb_results_multi)
+#         ch_combo_df[ch_combo_df["Condition"] == clf_class].to_csv(
+#             f"{out_path_clf}/Subgrid/global_channel_optimization_results_.csv",
+#             index=False,
+#         )
+#
+#         with open(
+#             f'{out_path_clf}/Subgrid/{info["subject_info"]["his_id"]}_spatial_channel_optimization_results.sav',
+#             "wb",
+#         ) as f:
+#             pickle.dump(pd.DataFrame(result_grid), f)
 
 
 def main(configs):
@@ -519,7 +574,7 @@ def main(configs):
         if config.EXPERIMENT.FOUR_DOF:
             # print(f'Commence Experiment on 4-DoF for {configs.DATA.PATH.split("/")[-1].split("_")[0]}.')
             experiment_four_DoF(
-                ECOG_processor, config, estimator, config.SUBGRID.HP, config.SUBGRID.CV, ch_info
+                ECOG_processor, config, estimator, ch_info
             )
         else:
             print(
@@ -529,9 +584,10 @@ def main(configs):
         # Run experiment on 8-DoF
         if config.EXPERIMENT.EIGHT_DOF:
             # print(f'Commence Experiment on 8-DoF for all Hand Movements.')
-            experiment_eight_DoF(
-                config, estimator, config.SUBGRID.HP, config.SUBGRID.CV, ch_info
-            )
+            # experiment_eight_DoF(
+            #     config, estimator, config.SUBGRID.HP, config.SUBGRID.CV, ch_info
+            # )
+            print(f"Experiment on 8-DoF for all Hand Movements skipped...")
         else:
             print(f"Experiment on 8-DoF for all Hand Movements skipped...")
         print(f"Done with {subject}")

@@ -113,7 +113,7 @@ def channel_combination_serarch(
         # ),
         "RS": RandomSearch(
             dims, 'tabular', estimator, scoring=metric, n_iter=config.SUBGRID.RS_ITER, cv=cv,
-            random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
+            strategy="joint", random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "RFE": RecursiveFeatureElimination(
             dims, 'tabular', estimator, scoring=metric, n_features_to_select=config.SUBGRID.RFE_RATIO, cv=cv,

@@ -10,7 +10,6 @@ from numbers import Real, Integral
 from typing import Tuple, List, Union, Dict, Any, Optional, Callable
 
 import numpy
-import ray
 from scipy._lib._util import check_random_state
 from scipy.optimize import Bounds
 from scipy.optimize._constraints import new_bounds_to_old
@@ -359,10 +358,6 @@ class SimulatedAnnealing(BaseOptimizer):
         need_to_stop = False
         best_score = 0.0
 
-        # Setup Pool of processes for parallel evaluation
-        if self.n_jobs > 1:
-            ray.init(num_cpus=self.n_jobs)
-
         minimizer_kwargs = {"method": self.optimizer_method, "tol": self._tol}
 
         # Wrapper for the objective function
@@ -403,9 +398,9 @@ class SimulatedAnnealing(BaseOptimizer):
         # Run the search loop
         idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
         progress_bar = tqdm(
-            range(self.n_iter),
-            desc=self.__class__.__name__,
-            postfix=f"{idtr}{self.__class__.__name__}",
+            range(self._update_n_iter(self.n_iter)),
+            desc=f"{idtr}{self.__class__.__name__}",
+            postfix=f"{best_score:.6f}",
             disable=not self.verbose,
             leave=True,
         )
@@ -468,10 +463,6 @@ class SimulatedAnnealing(BaseOptimizer):
                         break
                 self.iter_ += 1
                 wait += 1
-
-        # Close Pool of Processes
-        if self.n_jobs > 1:
-            ray.shutdown()
 
         # Obtain the final best_solution, best_state and best_score
         best_solution = energy_state.xbest

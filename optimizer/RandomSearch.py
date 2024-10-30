@@ -6,13 +6,11 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-import multiprocessing
-from functools import partial
 from numbers import Integral
 from typing import Optional, Union, Any, Dict, Tuple, Callable
 
 import numpy
-import numpy as np
+import ray
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 from sklearn.utils._param_validation import Interval
@@ -198,12 +196,6 @@ class RandomSearch(BaseOptimizer):
             else self._dim_size
         )
 
-        # Setup Pool of processes for parallel evaluation
-        pool = None
-        if self.n_jobs > 1:
-            self.result_grid_ = multiprocessing.Manager().list()
-            pool = multiprocessing.Pool(self.n_jobs)
-
         # Run search
         idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
         progress_bar = tqdm(
@@ -214,13 +206,13 @@ class RandomSearch(BaseOptimizer):
             leave=True,
         )
         for self.iter_ in progress_bar:
-            mask = np.random.uniform(
+            mask = numpy.random.uniform(
                 self._bounds[0],
                 self.bounds[1],
                 size=(self.n_perturbations, *mask_dim),
             )
 
-            scores = self._compute_objective(self._objective_function, mask, pool)
+            scores = self._compute_objective(mask)
 
             # Update logs and early stopping
             wait += 1
@@ -230,7 +222,7 @@ class RandomSearch(BaseOptimizer):
                     wait = 0
                 best_score = score
                 best_state = mask[scores == score]
-                best_state = best_state[np.random.choice(best_state.shape[0])]
+                best_state = best_state[numpy.random.choice(best_state.shape[0])]
             progress_bar.set_postfix(best_score=f"{best_score:.6f}")
             if wait > self._patience:
                 progress_bar.set_postfix(
@@ -249,58 +241,47 @@ class RandomSearch(BaseOptimizer):
                     )
                     break
 
-        # Close Pool of Processes
-        if self.n_jobs > 1:
-            pool.close()
-            pool.join()
-
         best_solution = best_state
         best_state = best_state > 0.5
         best_score = best_score * 100
         return best_solution, best_state, best_score
 
-    @staticmethod
     def _compute_objective(
-        objective_func: Callable,
+        self,
         random_perturbations: numpy.ndarray,
-        pool: multiprocessing.Pool = None,
-    ) -> np.ndarray:
+    ) -> numpy.ndarray:
         """
-        Generate random masks and compute their objective function scores in parallel.
+        Generate random masks and compute their objective function scores. This method
+        allows the RS algorithm to interface correctly with the objective function by
+        converting the input mask tensor into individuals and evaluating them.
+
+        If more than one cpu core is passed, then the evaluation of the particles is
+        done in parallel using multiple processes.
 
         Parameters
         ----------
         :param random_perturbations: numpy.ndarray
             The random generated perturbations.
-        :param objective_func : Callable
-            The objective function to compute scores.
-        :param pool : multiprocessing.Pool, optional
-            The pool to be used for parallel computation. If None, computation is done sequentially.
 
         Returns
         -------
         numpy.ndarray
-            Array of scores for the generated masks.
+            The performance-matrix for a collection of masks.
         """
+        positions_split = numpy.array_split(
+            random_perturbations, random_perturbations.shape[0]
+        )
+
+        # fmt: off
+        # Use multiprocessing pool to compute scores in parallel
+        if self.n_jobs > 1:
+            return ray.get(
+                [self._objective_function_wrapper.remote(self, pos) for pos in positions_split]
+            )
         # If no pool is provided, compute scores sequentially
-        if pool is None:
-            return numpy.array(
-                [
-                    objective_func(pertubation)
-                    for pertubation in numpy.array_split(
-                        random_perturbations, random_perturbations.shape[0]
-                    )
-                ]
-            )
         else:
-            # Use multiprocessing pool to compute scores in parallel
-            results = pool.map(
-                partial(objective_func),
-                numpy.array_split(
-                    random_perturbations, random_perturbations.shape[0]
-                ),  # pool._processes
-            )
-            return numpy.array(results)
+            return [self._objective_function(pos) for pos in positions_split]
+        # fmt: on
 
     def _handle_bounds(self):
         """
@@ -317,3 +298,21 @@ class RandomSearch(BaseOptimizer):
     def _handle_prior(self):
         """Placeholder Function"""
         return None
+
+    @ray.remote
+    def _objective_function_wrapper(self, mask: numpy.ndarray) -> float:
+        """
+        Wraps the objective function to adapt it for compatibility with ray's cpu
+        parallelization.
+
+        Parameters:
+        -----------
+        mask : numpy.ndarray
+            An individual mask representing potential solutions.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            The mask performanc score.
+        """
+        return self._objective_function(x)

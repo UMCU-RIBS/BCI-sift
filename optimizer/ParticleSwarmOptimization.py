@@ -6,13 +6,12 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-import multiprocessing
 from collections import deque
-from functools import partial
 from numbers import Real
 from typing import Tuple, Union, Dict, Any, Optional, Callable
 
 import numpy
+import ray
 from pyswarms.backend import (
     BoundaryHandler,
     VelocityHandler,
@@ -384,11 +383,6 @@ class ParticleSwarmOptimization(BaseOptimizer):
         bh.memory = swarm.position
         vh.memory = swarm.position
 
-        # Setup Pool of processes for parallel evaluation
-        pool = None
-        if self.n_jobs > 1:
-            self.result_grid_ = multiprocessing.Manager().list()
-            pool = multiprocessing.Pool(self.n_jobs)
         ftol_history = deque(maxlen=self.patience)
 
         # Run the search loop
@@ -400,12 +394,9 @@ class ParticleSwarmOptimization(BaseOptimizer):
             disable=not self.verbose,
             leave=True,
         )
-
         for self.iter_ in progress_bar:
             # Compute cost for current position and personal best
-            swarm.current_cost = self.compute_objective_function(
-                swarm, self._objective_function_wrapper, pool=pool
-            )
+            swarm.current_cost = self.compute_objective_function(swarm)
             swarm.pbest_pos, swarm.pbest_cost = compute_pbest(swarm)
             best_cost_yet_found = numpy.min(swarm.best_cost)
 
@@ -454,11 +445,6 @@ class ParticleSwarmOptimization(BaseOptimizer):
             )
             swarm.position = top.compute_position(swarm, self._bounds, bh)
 
-        # Close Pool of Processes
-        if self.n_jobs > 1:
-            pool.close()
-            pool.join()
-
         # Obtain the final best_solution, best_state and best_score
         best_solution = swarm.pbest_pos  # [swarm.pbest_cost.argmin()].copy()
         best_state = swarm.pbest_pos[swarm.pbest_cost.argmin()] > 0.5
@@ -466,41 +452,44 @@ class ParticleSwarmOptimization(BaseOptimizer):
 
         return best_solution, best_state, best_score
 
-    @staticmethod
     def compute_objective_function(
-        swarm: Swarm, objective_func: Callable, pool: multiprocessing.Pool = None
+        self,
+        swarm: Swarm,  # objective_func: Callable, pool: multiprocessing.Pool = None
     ):
         """
-        Evaluate particles using the objective function
+        Evaluate particles using the objective function. This method allows the PSO
+        algorithm to interface correctly with the objective function by converting the
+        input particle positions into individuals and evaluating them.
 
-        This method evaluates each particle in the swarm according to the
-        objective function passed.
-
-        If a pool is passed, then the evaluation of the particles is done in
-        parallel using multiple processes.
+        If more than one cpu core is passed, then the evaluation of the particles is
+        done in parallel using multiple processes.
 
         Parameters
         ----------
         :param swarm : Swarm
             A Swarm instance
-        :param objective_func : Callable
-            Objective function to be evaluated
-        :param pool: multiprocessing.Pool, optional
-            The pool to be used for parallel particle evaluation
 
         Returns
         -------
         :return: numpy.ndarray
-            Cost-matrix for the given swarm
+            Cost-matrix for the given swarm.
         """
-        if pool is None:
-            return objective_func(swarm.position)
-        else:
-            results = pool.map(
-                partial(objective_func),
-                numpy.array_split(swarm.position, pool._processes),
+        positions_split = numpy.array_split(
+            swarm.position, swarm.position.shape[0]
+        )
+
+        # fmt: off
+        # Use multiprocessing pool to compute scores in parallel
+        if self.n_jobs > 1:
+            results = ray.get(
+                [self._objective_function_wrapper.remote(self, pos) for pos in positions_split]
             )
-            return numpy.concatenate(results)
+        # If no pool is provided, compute scores sequentially
+        else:
+            results = [self._objective_function(pos) for pos in positions_split]
+        # fmt: on
+
+        return numpy.array(results) * -1
 
     def _handle_bounds(self) -> Tuple[numpy.ndarray, numpy.ndarray]:
         """
@@ -564,21 +553,21 @@ class ParticleSwarmOptimization(BaseOptimizer):
             f" position-matrix of the particles (n_particles, features)."
         )
 
-    def _objective_function_wrapper(self, x: numpy.ndarray) -> numpy.ndarray:
+    @ray.remote
+    def _objective_function_wrapper(self, particle: numpy.ndarray) -> float:
         """
-        Wraps the objective function to adapt it for compatibility with the PSO
-        algorithm. This method allows the PSO algorithm to interface correctly
-        with the objective function by converting the input particle positions
-        into a suitable format and evaluating them.
+        Wraps the objective function to adapt it for compatibility with ray's cpu
+        parallelization.
 
         Parameters:
         -----------
-        x : numpy.ndarray
-            An array of particle positions representing potential solutions.
+        particle : numpy.ndarray
+            An individual particle positions representing potential solutions.
 
         Returns:
         --------
         :return: numpy.ndarray
-            An array of fitness values for each particle in the swarm.
+            The particle performance score.
         """
-        return numpy.array([-self._objective_function(x[i]) for i in range(x.shape[0])])
+        return self._objective_function(particle)
+        # numpy.array([-self._objective_function(x[i]) for i in range(x.shape[0])])

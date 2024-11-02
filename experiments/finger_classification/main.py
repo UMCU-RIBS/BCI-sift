@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 from ray import tune
 from scipy import stats
+from sklearn import clone
 from sklearn.dummy import DummyClassifier
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import (
@@ -35,6 +36,7 @@ from optimizer import (
     RandomSearch,
     SimulatedAnnealing,
 )
+from optimizer.backend._backend import FlattenTransformer
 from preprocessing import GestureFingerDataProcessor, ECOGPreprocessor
 from utils.hp_tune import DecoderOptimization, PerfTimer
 
@@ -94,8 +96,6 @@ def channel_combination_serarch(
     name = info["subject_info"]["his_id"]
 
     # groups = make_groups(y)
-    X = X.reshape(X.shape[0], X.shape[1] * X.shape[2], X.shape[3], X.shape[4])
-    # X = np.mean(X, axis=(2, 3))
 
     n_cv = cv if isinstance(cv, (float, int)) else cv.get_n_splits()  # groups=groups)
     estimator_name = (
@@ -103,7 +103,7 @@ def channel_combination_serarch(
         if isinstance(estimator, Pipeline)
         else estimator[-1].__class__.__name__
     )
-
+    dummy = Pipeline([("scaler", MinMaxScaler()), ("classifier", DummyClassifier(strategy="most_frequent"))])
     opt_lib = {
         # "SES": SpatialExhaustiveSearch(
         #     dims, estimator, scoring=metric, cv=cv, strategy="joint", n_jobs=n_jobs, verbose=False if with_hp else True
@@ -114,7 +114,7 @@ def channel_combination_serarch(
         # ),
         "RS": RandomSearch(
             dims, 'tabular', estimator, scoring=metric, n_iter=config.SUBGRID.RS_ITER, cv=cv,
-            strategy="joint", random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
+            random_state=seed, n_jobs=n_jobs, verbose=False if with_hp else True,
         ),
         "RFE": RecursiveFeatureElimination(
             dims, 'tabular', estimator, scoring=metric, n_features_to_select=config.SUBGRID.RFE_RATIO, cv=cv,
@@ -138,7 +138,7 @@ def channel_combination_serarch(
     results = []
     models = []
 
-    for method, clf in ([("Majority", DummyClassifier(strategy="most_frequent")), (estimator_name, estimator)]
+    for method, clf in ([("Majority", dummy), (estimator_name, estimator)]
                         + [(name, optimizer) for name, optimizer in opt_lib.items()]):
 
         if method in ["Majority", estimator_name]:
@@ -213,7 +213,7 @@ def channel_combination_serarch(
         # Common report fields for both baselines and optimizers
         report = {"Method": method, "Dimensions": str(dims), "Subject": name, "Condition": condition, "Metric": metric}
         results.append({**report, **report_base, **report_cv})
-        models.append({method: clf})
+        models.append(clf)
 
     # Concatenate all results
     result_grids = pd.concat(result_grids, axis=0)
@@ -271,11 +271,16 @@ def experiment_four_DoF(ECOG_processor, configs, estimator, ch_info):
         info["ied"] = ch_info.loc[info["subject_info"]["his_id"], "IED"]
         info["ed"] = ch_info.loc[info["subject_info"]["his_id"], "ED"]
 
+        X = X.reshape(X.shape[0], X.shape[1] * X.shape[2], X.shape[3], X.shape[4])
+        #X = np.mean(X, axis=(2, 3))
+        X = X[:, :, -1, :]
+        #X = np.mean(X, axis=2)
+
         if config.SUBGRID.OUTER_CV > 1:
             outer_cv = StratifiedKFold(n_splits=config.SUBGRID.OUTER_CV, shuffle=True, random_state=config.SEED)
 
             for idx, (train_idx, test_idx) in enumerate(outer_cv.split(X, y)):
-                print(f"Commence Experiment on fold {idx}")
+                print(f"\nCommence Experiment on fold {idx}")
                 X_train, X_test = X[train_idx], X[test_idx]
                 y_train, y_test = y[train_idx], y[test_idx]
 
@@ -300,26 +305,50 @@ def experiment_four_DoF(ECOG_processor, configs, estimator, ch_info):
                 ch_combo_df = pd.DataFrame(comb_results_multi)
                 dimensions_file = "_".join(str(d) for d in config.SUBGRID.DIMS)
                 ch_combo_df[ch_combo_df["Condition"] == clf_class].to_csv(
-                    f"{out_path_clf}/_trainings_fold_{idx}_global_channel_optimization_results_dim_{dimensions_file}.csv",
+                    f"{out_path_clf}/global_optimization_trainings_fold_{idx}_dim_{dimensions_file}.csv",
                     index=False,
                 )
                 pd.DataFrame(result_grid).to_csv(
-                    f'{out_path_clf}/{info["subject_info"]["his_id"]}_trainings_fold_{idx}_dim_{dimensions_file}_full_result_table.csv',
+                    f'{out_path_clf}/full_result_table_{info["subject_info"]["his_id"]}_trainings_fold_{idx}_dim_{dimensions_file}.csv',
+                    index=False,
+                )
+                print(f"\nEvaluate performance on train and test fold {idx}")
+                # Testings phase
+                results = []
+                for clf in models:
+                    if hasattr(clf, "mask_"):
+                        X_test_transformed = clf.transform(X)[test_idx]
+                        X_train_transformed = clf.transform(X)[train_idx]
+                        name = clf.__class__.__name__
+                        est = clone(estimator)
+                        mask = clf.mask_
+                    else:
+                        X_test_transformed = X_test
+                        X_train_transformed = X_train
+                        name = clf.named_steps["classifier"].__class__.__name__
+                        est = clone(clf)
+                        mask = np.ones(X.shape)
+
+                    est.steps.insert(0, ("flatten", FlattenTransformer()))
+                    est.fit(X_train_transformed, y_train)
+
+                    with PerfTimer() as trainings_timer:
+                        train_score = get_scorer(config.SUBGRID.METRIC)(est, X_train_transformed, y_train)
+                    with PerfTimer() as inference_timer:
+                        test_score = get_scorer(config.SUBGRID.METRIC)(est, X_test_transformed, y_test)
+                    print(f"{name}. Train score: {np.round(train_score, 6)}. Test score: {np.round(test_score, 6)}.")
+
+                    base = {"Method": name, "Metric": config.SUBGRID.METRIC,"Condition": clf_class,
+                          "Trainings Score": np.round(train_score, 6), "Trainings Time": np.round(trainings_timer.duration, 6),
+                          "Inference Score": np.round(test_score, 6), "Inference Time": np.round(inference_timer.duration, 6)}
+                    results.append(base)
+                    np.save(f"{out_path_clf}/mask_{name}_test_fold_{idx}_dim_{dimensions_file}.npy", mask)
+                results = pd.DataFrame(results)
+                results.to_csv(
+                    f"{out_path_clf}/global_optimization_test_fold_{idx}_dim_{dimensions_file}.csv",
                     index=False,
                 )
 
-                # Testings phase
-                for name, clf in models:
-                    if hasattr(clf, "mask_"):
-                        X_test_transformed = clf.transform(X_test)
-                    score = get_scorer(config.SUBGRID.METRIC)(estimator, X_test_transformed, y_test)
-                    results = pd.DataFrame([{"Method": clf.__class__.__name__, "Metric": config.SUBGRID.METRIC, "Condition": clf_class, "Score": score}])
-
-                    # Save results to a Channel Combination analytics to a csv
-                    results.to_csv(
-                        f"{out_path_clf}/_test_fold_{idx}_global_channel_optimization_results_dim_{dimensions_file}.csv",
-                        index=False,
-                    )
         else:
             ch_comb_results, result_grid, models = channel_combination_serarch(
                 X=X,
@@ -474,7 +503,7 @@ def main(configs):
     num_cpu = os.cpu_count() - 2
     print(f"\nNumber of available cpu cores: {num_cpu}")
 
-    estimator = Pipeline([("scaler", MinMaxScaler()), ("svc", SVC(kernel="linear"))])
+    estimator = Pipeline([("scaler", MinMaxScaler()), ("classifier", SVC(kernel="rbf"))])
 
     """Acquire data set and supplementary material"""
     print(f"\nLoad raw BIDS IEEG data and supplementary material into memory...")
@@ -578,7 +607,7 @@ def main(configs):
             )
         else:
             print(
-                f'Experiment on 4-DoF for {configs.DATA.PATH.split("/")[-1].split("_")[0]} skipped...'
+                f'\nExperiment on 4-DoF for {configs.DATA.PATH.split("/")[-1].split("_")[0]} skipped...'
             )
 
         # Run experiment on 8-DoF
@@ -587,9 +616,9 @@ def main(configs):
             # experiment_eight_DoF(
             #     config, estimator, config.SUBGRID.HP, config.SUBGRID.CV, ch_info
             # )
-            print(f"Experiment on 8-DoF for all Hand Movements skipped...")
+            print(f"\nExperiment on 8-DoF for all Hand Movements skipped...")
         else:
-            print(f"Experiment on 8-DoF for all Hand Movements skipped...")
+            print(f"\nExperiment on 8-DoF for all Hand Movements skipped...")
         print(f"Done with {subject}")
 
 

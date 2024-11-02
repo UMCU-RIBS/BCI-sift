@@ -199,7 +199,7 @@ class RandomSearch(BaseOptimizer):
         # Run search
         idtr = f"{self._dims_incl}: " if isinstance(self._dims_incl, int) else ""
         progress_bar = tqdm(
-            range(self.n_iter),
+            range(self._update_n_iter(self.n_iter)),
             desc=f"{idtr}{self.__class__.__name__}",
             postfix=f"{best_score:.6f}",
             disable=not self.verbose,

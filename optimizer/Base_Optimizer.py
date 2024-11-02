@@ -43,7 +43,7 @@ from optimizer.backend._backend import (
 from optimizer.backend._trainer import cross_validate
 from utils.hp_tune import PerfTimer
 
-__all__ = []
+__all__ = ["BaseOptimizer"]
 
 
 class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
@@ -402,7 +402,10 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         return self
 
     def transform(
-        self, X: numpy.ndarray, y: Optional[numpy.ndarray] = None
+        self,
+        X: numpy.ndarray,
+        y: Optional[numpy.ndarray] = None,
+        feature_space: str = "tabular",
     ) -> numpy.ndarray:
         """
         Transforms the input with the mask obtained from the solution of the
@@ -422,7 +425,22 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         """
         check_is_fitted(self)
 
-        return self._feature_transform(X)
+        if feature_space is None:
+            feature_space = self.feature_space
+
+        if (
+            feature_space == "tabular"
+        ):  # TODO try to reuse a transform function. mask must be independt of the samples
+            return X[:, self.mask_[0]]
+        elif feature_space == "tensor":
+            return X * numpy.tile(
+                self.mask_[0], (X.shape[0], *(1 for _ in X.shape[1:]))
+            )  # TODO try to reuse a transform function. mask must be independt of the samples
+        else:
+            raise ValueError(
+                f"The argument feature_space must be 'tabular' or 'tensor'."
+                f" Got {self.feature_space}."
+            )
 
     @abstractmethod
     def _run(self) -> NotImplementedError:
@@ -840,7 +858,9 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         returns: None
         """
         if self.n_jobs > 1:
-            self.result_grid_ = pd.concat(ray.get(self.result_grid_.get.remote()), axis=0, ignore_index=True)
+            self.result_grid_ = pd.concat(
+                ray.get(self.result_grid_.get.remote()), axis=0, ignore_index=True
+            )
         else:
             self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
 

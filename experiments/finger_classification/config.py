@@ -92,33 +92,35 @@ _C.EXPERIMENT.EIGHT_DOF = False
 # -----------------------------------------------------------------------------
 _C.SUBGRID = CN()
 # Define which classifiers to experiment with. Possible options:
-_C.SUBGRID.DIMS = (2, 1, 3)  #
+_C.SUBGRID.DIMS = (1, 2)  # (2, 1, 3)  #
 # Early stopping criteria for the dimensions
-_C.SUBGRID.PATIENCE = (20, 75, 75)  # (20, 75)
+# = (10, 75, 75)  # (20, 75)
 # _C.SUBGRID.CLASSIFIERS = ['base', 'lr', 'lda', 'xgb', 'svm']
-# Optimizer options: 'PS', 'SES', 'SSHC', 'RFE', 'EA', 'SA', 'PSO'
-_C.SUBGRID.OPTIMIZERS = ["PSO"]
+# Optimizer options: 'RS', 'SES', 'SSHC', 'RFE', 'EA', 'SA', 'PSO'
+_C.SUBGRID.OPTIMIZERS = ["RS", "RFE", "EA", "SA", "PSO"]
 # With or without hyperparameter tuning
 _C.SUBGRID.HP = False
-# Number of Crossvalidation Folds
-_C.SUBGRID.CV = 0.8  # 10
+# Number of Crossvalidation Folds (for generalization performance for the feat optimizers)
+_C.SUBGRID.OUTER_CV = 10  # 10
+# Number of Crossvalidation Folds (for the scikit-learn model)
+_C.SUBGRID.INNER_CV = 10  # 10
 # Define which metric top use to evaluate the classifier.
 _C.SUBGRID.METRIC = "accuracy"
-# Number of random mask generations
-_C.SUBGRID.RS_ITER = 2  # 150  # 150
 # Iteration factor that is multiplied with the total number of electrodes in the grid.
 # Determines the number of reinitialization (random starting positions) of the algorithm.
 _C.SUBGRID.SSHC_FACTOR = 0.1  # 1.5  # 150
 # Percentage of Retained Features of the Recursive Feature Elimination Algorithm.
 _C.SUBGRID.RFE_RATIO = 1
-_C.SUBGRID.RFE_STEP = 1  # 10
+_C.SUBGRID.RFE_STEP = 10
+# Number of random mask generations
+_C.SUBGRID.RS_ITER = 120  # 180
 # Number of Generations of the Evolutionary Algorithm.
-_C.SUBGRID.EA_ITER = 2  # 150  # 250  # 250
+_C.SUBGRID.EA_ITER = 120  # 180
 # Number of Iterations of the Dual Simulated Annealing Algorithm.
 # Iterations are somewhat lower due to longer convergence time.
-_C.SUBGRID.SA_ITER = 2  # 150  # 150  # 150
+_C.SUBGRID.SA_ITER = 120  # 180
 # Number of Iterations of the Particle Swarm Optimization Algorithm.
-_C.SUBGRID.PSO_ITER = 10  # 150  # 250  # 250
+_C.SUBGRID.PSO_ITER = 120  # 180
 
 # -----------------------------------------------------------------------------
 # Output Paths

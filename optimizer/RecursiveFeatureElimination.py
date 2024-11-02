@@ -78,7 +78,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         Proportion of features that should be reached through elimination
     :param step: Union[float, int], default = 1
         Number of features to be eliminated in each step of the algorithm
-    :param importance_getter: str, default = "named_steps.svc.coef_" #TODO: change to auto see scikitlearn RFE
+    :param importance_getter: str, default = "named_steps.classifier.coef_" #TODO: change to auto see scikitlearn RFE
         String that specifies an attribute name/path for extracting feature importance
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
@@ -123,6 +123,29 @@ class RecursiveFeatureElimination(BaseOptimizer):
     dimension [samples, features]. For example, scikit-learn's
     :code: `FunctionTransformer` can achieve this.
 
+    Examples:
+    ---------
+    The following example shows how to retrieve a feature mask for a synthetic data set.
+
+    .. code-block:: python
+
+        import numpy
+        from sklearn.svm import SVC
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import MinMaxScaler
+        from sklearn.datasets import make_classification
+        from FingersVsGestures.src.channel_elimination import RecursiveFeatureElimination # TODO adjust
+
+        X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
+        X = X.reshape((100, 8, 4, 100))
+        grid = (2, 3)
+        estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
+
+        rfe = RecursiveFeatureElimination(grid, estimator)
+        rfe.fit(X, y)
+        print(rfe.score_)
+        28.679234564345677
+
     Returns:
     --------
     :return: None
@@ -135,9 +158,9 @@ class RecursiveFeatureElimination(BaseOptimizer):
     _parameter_constraints.update(
         {
             "n_features_to_select": [Interval(RealNotInt, 0, 1, closed="right"),
-                                     Interval(Integral, 0, None, closed="neither"),],
+                                     Interval(Integral, 0, None, closed="neither"), ],
             "step": [Interval(Integral, 0, None, closed="neither"),
-                     Interval(RealNotInt, 0, 1, closed="neither"),],
+                     Interval(RealNotInt, 0, 1, closed="neither"), ],
             "importance_getter": [str],
         }
     )
@@ -157,7 +180,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         # Recursive Feature Elimination Settings
         n_features_to_select: Union[int, float] = 1,
         step: Union[str, float] = 1,  # TODO automatical step size
-        importance_getter: str = "named_steps.svc.coef_",  # TODO Add auto
+        importance_getter: str = "named_steps.classifier.coef_",  # TODO Hardcoded mus be determined automatical as default
         # Training Settings
         tol: Union[Tuple[int, ...], float] = 1e-5,
         patience: Union[Tuple[int, ...], int] = int(1e5),

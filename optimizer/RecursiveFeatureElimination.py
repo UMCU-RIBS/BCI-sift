@@ -16,12 +16,13 @@ import numpy
 from sklearn import clone
 from sklearn.metrics import get_scorer
 from sklearn.model_selection import BaseCrossValidator
-from sklearn.model_selection import cross_validate, train_test_split
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.utils._param_validation import Interval, RealNotInt
 # from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
 from tqdm import tqdm
 
+from optimizer.backend._trainer import cross_validate
 from utils.hp_tune import PerfTimer
 from .Base_Optimizer import BaseOptimizer
 

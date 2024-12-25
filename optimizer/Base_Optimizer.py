@@ -37,7 +37,8 @@ from sklearn.utils._param_validation import (
 from sklearn.utils.validation import check_is_fitted
 
 from optimizer.backend import ListManager
-from optimizer.backend._backend import to_string, PerfTimer
+from optimizer.backend._backend import to_string, PerfTimer, HallOfFame
+from optimizer.backend._ray import RayHallOfFame
 from optimizer.backend._trainer import cross_validate
 
 __all__ = ["BaseOptimizer"]
@@ -174,9 +175,9 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         patience: Union[Tuple[int, ...], int] = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
-        callback: Optional[Callable] = None, #TODO move to subclass (because implemented there)
+        callback: Optional[Callable] = None,
+        # TODO move to subclass (because implemented there)
         # Misc
-        with_ray: bool = False,
         n_jobs: int = -1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
@@ -329,10 +330,12 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
 
         self.iter_ = 0
         self.result_grid_ = []
+        self.hall_of_fame = HallOfFame(size=25)
 
         # Setup Pool of processes for parallel evaluation
         if self.n_jobs > 1:
             self.result_grid_ = ListManager.remote()
+            self.hall_of_fame = RayHallOfFame
             if not ray.is_initialized():
                 ray.init(num_cpus=self.n_jobs)
 
@@ -575,7 +578,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             "Method": self.__class__.__name__,
             "Iteration": self.iter_,
             "Dimensions": to_string(self._dims_incl),
-            "Mask": [mask.reshape(self._dim_size)],
+            # "Mask": [mask.reshape(self._dim_size)],
             "Size": numpy.sum(mask),
             "Metric": self.scoring,
             "Mean": numpy.round(numpy.mean(scores), 6),
@@ -596,10 +599,16 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             for i, score in enumerate(numpy.round(scores, 6)):
                 diagnostics[f"Fold {i + 1}"] = score
 
+        candidate = mask.reshape(self._dim_size)
+        if not self.strategy == "joint":
+            candidate = self.mask_ * self._prepare_mask(candidate)
+
         if self.n_jobs > 1:
             self.result_grid_.append.remote(pd.DataFrame(diagnostics))
+            self.hall_of_fame.add.remote(numpy.mean(scores), candidate)
         else:
             self.result_grid_.append(pd.DataFrame(diagnostics))
+            self.hall_of_fame.add(numpy.mean(scores), candidate)
 
     def _prepare_mask(
         self,
@@ -738,100 +747,6 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         else:
             self._estimator.set_params(**self.estimator_params)
 
-    # def _allocate_cpu_resources(
-    #         self,
-    #         cv: int,
-    #         n: int
-    # ) -> Tuple[int, int]:
-    #     """
-    #     Choose the best (ea_cores, cv_cores) pair.
-    #
-    #     Parameters:
-    #     -----------
-    #     :param cv: int
-    #         Number of cross-validation folds.
-    #     :param n: int
-    #         Number of generations in the evolutionary algorithm.
-    #
-    #     Raise:
-    #     ______
-    #     :raise ValueError:
-    #         Unable to allocate CPU resources with the specified cross-validation folds,
-    #         number of iterations, and the available free cores.
-    #
-    #     Returns:
-    #     --------
-    #     returns: Tuple[int, int]
-    #         The best combination of cores (algo, cv) allocated to the algorithm
-    #         and the cross-validation satisfying the constraints.
-    #     """
-    #     pairs = [
-    #         (algo_cores, self.n_jobs // algo_cores)
-    #         for algo_cores in range(1, self.n_jobs + 1)
-    #         if self.n_jobs % algo_cores == 0
-    #     ]
-    #     valid_pairs = [
-    #         (algo_cores, cv_cores)
-    #         for algo_cores, cv_cores in pairs
-    #         if algo_cores <= n and cv_cores <= cv and cv % cv_cores == 0
-    #     ]
-    #
-    #     if not valid_pairs:
-    #         raise ValueError(
-    #             f"CPU resource allocation failed with constraints: n_jobs={self.n_jobs}, cv={cv}, n={n}."
-    #         )
-    #
-    #     return max(valid_pairs, key=lambda x: x[1])
-
-    # def _check_estimator_data_requirements(
-    #         self
-    # ) -> None:
-    #     """
-    #     Performs a check on whether the passed estimator expects 2-dimensional data
-    #     representation. Automatically adjusts the estimator to ensure compatibility.
-    #
-    #     Raises:
-    #     -------
-    #     :raise ValueError:
-    #         If the estimator raises a `ValueError` related to dimensionality that cannot
-    #         be resolved by automatically inserting a :code: `FlattenTransformer` and
-    #         :code: `SafeVarianceThreshold` into the pipeline, the ValueError is passed
-    #         to the User.
-    #
-    #     Returns:
-    #     --------
-    #     :returns: None
-    #     """
-    #     try:
-    #         self._validate_data(self._X)
-    #     except ValueError as e:
-    #         cases = [
-    #             "2D",
-    #             "dim",
-    #             "dims",
-    #             "dimensions",
-    #             "dimension",
-    #             "dimensional",
-    #             "input data",
-    #             "input",
-    #             "data",
-    #         ]
-    #         if any(term in str(e).lower() for term in cases):
-    #             try:
-    #                 dim_comp = Pipeline(
-    #                     [
-    #                         ("flatten", FlattenTransformer()),
-    #                         ("clean", SafeVarianceThreshold(threshold=0.0)),
-    #                     ]
-    #                 )
-    #                 self._validate_data(dim_comp.fit_transform(self._X), self._y)
-    #                 warnings.warn(
-    #                     f"Estimator adjusted for ND data compatibility.", UserWarning
-    #                 )
-    #                 self._estimator = Pipeline(dim_comp.steps + self._estimator.steps)
-    #             except e as e:
-    #                 raise e
-
     def _update_n_iter(self, n_iter: int) -> int:
         """
         Updates n_iter (if present in the subclass)
@@ -865,20 +780,3 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             )
         else:
             self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
-
-
-# Apply the sigmoid function to the mask
-# mask = 1 / (1 + np.exp(-np.array(mask)))
-#
-# # Flatten the mask if it has more than 1 dimension
-# if len(mask.shape) > 1:
-#     mask = mask.ravel()
-#
-# # Reshape the mask to align with the selected dimensions
-# reshaped_mask = mask.reshape(self.dim_size_)[tuple(self.slices_)]
-#
-# # Broadcast the mask of the considered dimensions to the full mask matching the data tensor
-# full_mask = np.broadcast_to(reshaped_mask, self.X_.shape)
-# mm = MinMaxScaler(feature_range=(self.bounds_[0], self.bounds_[1]))
-# X = self.X_.reshape(self.X_.shape[0], -1)
-# selected_features = mm.fit_transform(X) * full_mask.reshape(self.X_.shape[0], -1)

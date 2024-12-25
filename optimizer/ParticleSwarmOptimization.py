@@ -417,7 +417,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
                 )
                 break
             elif self.callback is not None:
-                if self.callback(swarm.best_cost, swarm.position, self.result_grid_):
+                if self.callback(self.iter_, self.n_particles, self.result_grid_):
                     progress_bar.set_postfix(
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )

@@ -23,10 +23,11 @@ from sklearn.utils._param_validation import Interval, RealNotInt
 from tqdm import tqdm
 
 from optimizer.backend._trainer import cross_validate
-from utils.hp_tune import PerfTimer
 from .Base_Optimizer import BaseOptimizer
 
 __all__ = ["RecursiveFeatureElimination"]
+
+from .backend._backend import PerfTimer
 
 
 class RecursiveFeatureElimination(BaseOptimizer):
@@ -380,7 +381,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
                 )
                 break
             elif self.callback is not None:
-                if self.callback(best_score, best_state, self.result_grid_):
+                if self.callback(self.iter_, 1, self.result_grid_):
                     progress_bar.set_postfix(
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )

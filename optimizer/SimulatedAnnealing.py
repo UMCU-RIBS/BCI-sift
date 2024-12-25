@@ -432,9 +432,7 @@ class SimulatedAnnealing(BaseOptimizer):
                     need_to_stop = True
                     break
                 elif self.callback is not None:
-                    if self.callback(
-                        energy_state.ebest, energy_state.xbest, self.result_grid_
-                    ):
+                    if self.callback(self.iter_, 1, self.result_grid_):
                         progress_bar.set_postfix(
                             best_score=f"Stopped by callback: {best_score:.6f}"
                         )

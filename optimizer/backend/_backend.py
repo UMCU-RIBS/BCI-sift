@@ -6,14 +6,34 @@
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-
+import os
+import pickle
 import re
+from collections import OrderedDict
+from time import time
 from typing import Tuple, List, Union, Dict, Any
 
 import numpy
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_selection import VarianceThreshold
+
+
+class PerfTimer:
+    """
+    High-resolution timer for measuring execution duration.
+    """
+
+    def __init__(self) -> None:
+        self.start: float = 0.0
+        self.duration: float = 0.0
+
+    def __enter__(self) -> "PerfTimer":
+        self.start = time.perf_counter()
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        self.duration = time.perf_counter() - self.start
 
 
 class SimulatedAnnealingReporter:
@@ -297,6 +317,7 @@ class SafeVarianceThreshold(BaseEstimator, TransformerMixin):
             # If an exception occurs, return the original input X
             return X
 
+
 def divide_into_parts(number, parts):
     # Calculate the base size of each part and the remainder
     base_size = number // parts
@@ -304,3 +325,31 @@ def divide_into_parts(number, parts):
     # Create the list of parts
     result = [base_size + 1] * remainder + [base_size] * (parts - remainder)
     return result
+
+
+class HallOfFame:
+    def __init__(self, size=1):
+        self.size = size
+        self.hall_of_fame = OrderedDict()
+
+    def add(self, score, state):
+        self.hall_of_fame[score] = state
+
+        # Keep only the best 25 based on performance
+        self.hall_of_fame = OrderedDict(
+            sorted(self.hall_of_fame.items(), key=lambda item: item[0])
+        )
+        while len(self.hall_of_fame) > self.size:
+            self.hall_of_fame.popitem(last=True)  # Remove the worst performance
+
+    def get(self):
+        return self.hall_of_fame
+
+    def save(self, filename=None):
+        with open(filename, "wb") as f:
+            pickle.dump(self.hall_of_fame, f)
+
+    def load(self, filename=None):
+        if os.path.exists(filename):
+            with open(filename, "rb") as f:
+                self.hall_of_fame = pickle.load(f)

@@ -36,9 +36,9 @@ from optimizer import (
     RandomSearch,
     SimulatedAnnealing,
 )
-from optimizer.backend._backend import FlattenTransformer
+from optimizer.backend._backend import FlattenTransformer, PerfTimer
 from preprocessing import GestureFingerDataProcessor, ECOGPreprocessor
-from utils.hp_tune import DecoderOptimization, PerfTimer
+from utils.hp_tune import DecoderOptimization
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -171,11 +171,24 @@ def channel_combination_serarch(
             if with_hp:
                 # Hyperparameter optimization for optimizers
                 param_space = {"estimator_params": {"C": tune.loguniform(0.001, 10)}}
-                dc = DecoderOptimization(estimator=clf, param_dist=param_space,
-                                         max_iter=clf.n_gen if method == "EA" else clf.n_iter,
-                                         num_samples=25, exp_name=method, metric=config.SUBGRID.METRIC,
-                                         search_optimizer="HEBO", out_path=output_path, max_concurrent=1)
+
+                if method == "EA" :
+                    max_iter, batch_size = clf.n_gen, clf.population_size
+                elif method == 'PSO':
+                    max_iter, batch_size = clf.n_iter, clf.n_particles
+                elif method == 'RS':
+                    max_iter, batch_size = clf.n_iter, clf.n_perturbations
+                elif method == 'SA':
+                    max_iter, batch_size = clf.n_iter, 1
+                elif method == 'RFE':
+                    max_iter, batch_size = (np.prod(X.shape[0]) - config.SUBGRID.RFE_RATIO)/ config.SUBGRID.RFE_STEP, 1
+
+                dc = DecoderOptimization(
+                    estimator=clf, param_dist=param_space, prior_dist = [{"estimator_params": {"C": 1.0}}],
+                    max_iter=max_iter, batch_size=batch_size, num_samples=config.SUBGRID.SAMPLES, exp_name=method, metric=config.SUBGRID.METRIC,
+                    search_optimizer="HEBO", search_scheduler='ASHA', out_path=output_path, max_concurrent=config.SUBGRID.MAX_CONCURRENT, n_jobs=n_jobs)
                 dc.optimize(X=X, y=y)
+                result_grids.append(dc.result_grid_)
             else:
                 # Fit optimizers without hyperparameter search
                 clf.fit(X, y)
@@ -189,7 +202,7 @@ def channel_combination_serarch(
                              "CV Scores": list(np.round(np.array(best.filter(like="Fold", axis=1).loc[0, :]) * 100, 3))
                              } if n_cv > 1 else {}
 
-            result_grids.append(clf.result_grid_)
+                result_grids.append(clf.result_grid_)
 
 
             # # Generate and save plots
@@ -271,9 +284,9 @@ def experiment_four_DoF(ECOG_processor, configs, estimator, ch_info):
         info["ied"] = ch_info.loc[info["subject_info"]["his_id"], "IED"]
         info["ed"] = ch_info.loc[info["subject_info"]["his_id"], "ED"]
 
-        X = X.reshape(X.shape[0], X.shape[1] * X.shape[2], X.shape[3], X.shape[4])
+        X = X.reshape((X.shape[0], X.shape[1] * X.shape[2], X.shape[3], X.shape[4]))
         #X = np.mean(X, axis=(2, 3))
-        X = X[:, :, -1, :]
+        # X = X[:, :, -1, :]
         #X = np.mean(X, axis=2)
 
         if config.SUBGRID.OUTER_CV > 1:
@@ -503,7 +516,8 @@ def main(configs):
     num_cpu = os.cpu_count() - 2
     print(f"\nNumber of available cpu cores: {num_cpu}")
 
-    estimator = Pipeline([("scaler", MinMaxScaler()), ("classifier", SVC(kernel="rbf"))])
+    estimator = Pipeline([("scaler", MinMaxScaler()), ("classifier", SVC(kernel="linear"))])
+    # estimator = Pipeline([("scaler", StandardScaler()), ("classifier", LinearDiscriminantAnalysis())])
 
     """Acquire data set and supplementary material"""
     print(f"\nLoad raw BIDS IEEG data and supplementary material into memory...")

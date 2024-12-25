@@ -443,11 +443,7 @@ class EvolutionaryAlgorithms(BaseOptimizer):
                 )
                 break
             elif self.callback is not None:
-                if self.callback(
-                    best_score,
-                    numpy.array(hof.items[0]).reshape(-1),
-                    self.result_grid_,
-                ):
+                if self.callback(self.iter_, self.population_size, self.result_grid_):
                     progress_bar.set_postfix(
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )

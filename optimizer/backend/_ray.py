@@ -1,6 +1,8 @@
 import ray
 
-__all__ = ["DictManager", "ListManager"]
+from optimizer.backend._backend import HallOfFame
+
+__all__ = ["DictManager", "ListManager", "HallOfFame"]
 
 
 @ray.remote
@@ -74,3 +76,4 @@ class ListManager:
     def len(self):
         """Get the number of results stored."""
         return len(self.results)
+

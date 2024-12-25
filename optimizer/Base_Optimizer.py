@@ -37,15 +37,13 @@ from sklearn.utils._param_validation import (
 from sklearn.utils.validation import check_is_fitted
 
 from optimizer.backend import ListManager
-from optimizer.backend._backend import (
-    to_string,
-)
+from optimizer.backend._backend import to_string, PerfTimer
 from optimizer.backend._trainer import cross_validate
-from utils.hp_tune import PerfTimer
 
 __all__ = ["BaseOptimizer"]
 
 
+# TODO in handle_prior initialize only with a fraction of the prior (e.g. for PSO) to allow more exploration
 class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
     """
     Base class for all channel optimizers that provides framework functionalities
@@ -176,8 +174,9 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         patience: Union[Tuple[int, ...], int] = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
-        callback: Optional[Callable] = None,
+        callback: Optional[Callable] = None, #TODO move to subclass (because implemented there)
         # Misc
+        with_ray: bool = False,
         n_jobs: int = -1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
@@ -333,8 +332,9 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
 
         # Setup Pool of processes for parallel evaluation
         if self.n_jobs > 1:
-            ray.init(num_cpus=self.n_jobs)
             self.result_grid_ = ListManager.remote()
+            if not ray.is_initialized():
+                ray.init(num_cpus=self.n_jobs)
 
         return (
             self.fit_joint()
@@ -569,6 +569,8 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         --------
         :return: None
         """
+        # TODO when parallelizing with tune the class is distributed across nodes and
+        #  class attributes (like self.iter, self_dim_size) dont get updated
         diagnostics = {
             "Method": self.__class__.__name__,
             "Iteration": self.iter_,

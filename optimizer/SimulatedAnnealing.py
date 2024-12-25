@@ -155,8 +155,10 @@ class SimulatedAnnealing(BaseOptimizer):
         which will be called at each iteration. :code: `x` and :code: `f` are
         the solution and function value, and :code: `context` contains the
         diagnostics of the current iteration.
-    :param n_jobs: Union[int, float], default = -1
+    :param n_jobs: int, default = -1
         The number of parallel jobs to run during cross-validation; -1 uses all cores.
+    :param hof_size: int, default = 1
+        The number of seats in the hall of fame (best solutions).
     :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
     :param verbose: Union[bool, int], default = False
@@ -271,6 +273,7 @@ class SimulatedAnnealing(BaseOptimizer):
         callback: Optional[Callable] = None,
         # Misc
         n_jobs: int = -1,
+        hof_size: int = 1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
@@ -290,6 +293,7 @@ class SimulatedAnnealing(BaseOptimizer):
             prior,
             callback,
             n_jobs,
+            hof_size,
             random_state,
             verbose,
         )
@@ -304,10 +308,6 @@ class SimulatedAnnealing(BaseOptimizer):
         self.accept = accept
         self.maxfun = maxfun
 
-        # Training Settings
-        self.tol = tol
-        self.patience = patience
-        self.callback = callback
 
     def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
@@ -432,7 +432,7 @@ class SimulatedAnnealing(BaseOptimizer):
                     need_to_stop = True
                     break
                 elif self.callback is not None:
-                    if self.callback(self.iter_, 1, self.result_grid_):
+                    if self._callback():
                         progress_bar.set_postfix(
                             best_score=f"Stopped by callback: {best_score:.6f}"
                         )
@@ -505,3 +505,14 @@ class SimulatedAnnealing(BaseOptimizer):
                 0.49 - gaus,
                 0.51 + gaus,
             )
+
+    def _callback(self) -> Union[None, bool]:
+        """
+        Handles the callbacks provided to the class.
+
+        Returns:
+        --------
+        :return Union[None, bool]:
+            Returns None, True or False depending on the callback function provided.
+        """
+        return self.callback(self.iter_, 1, self.result_grid_)

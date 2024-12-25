@@ -104,8 +104,10 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         will be called at each iteration. :code: `x` and :code: `f` are the solution and
         function value, and :code: `context` contains the diagnostics of the current
         iteration.
-    :param n_jobs: Union[int, float], default = -1
+    :param n_jobs: int, default = -1
         The number of parallel jobs to run during cross-validation; -1 uses all cores.
+    :param hof_size: int, default = 1
+        The number of seats in the hall of fame (best solutions).
     :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
     :param verbose: Union[bool, int], default = False
@@ -154,6 +156,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         "prior": [numpy.ndarray, None],
         "callback": [callable, None],
         "n_jobs": [Integral],
+        "hof_size": [int],
         "seed": ["random_state"],
         "verbose": ["verbose"],
     }
@@ -176,9 +179,9 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
         callback: Optional[Callable] = None,
-        # TODO move to subclass (because implemented there)
         # Misc
         n_jobs: int = -1,
+        hof_size: int = 1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
@@ -200,6 +203,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         self.callback = callback
         # Misc
         self.n_jobs = n_jobs
+        self.hof_size = hof_size
         self.random_state = random_state
         self.verbose = verbose
 
@@ -220,15 +224,19 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             del self._y
             del self.iter_
             del self.result_grid_
+            del self.hall_of_fame_
             del self._scorer
             del self._n_cv
             del self._estimator
             del self._dims_incl
             del self._dim_size
             del self._slices
+            del self._tol
+            del self._patience
             del self._prior
             del self._bounds
             del self.solution_
+            del self.state_
             del self.mask_
             del self.score_
 
@@ -330,12 +338,12 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
 
         self.iter_ = 0
         self.result_grid_ = []
-        self.hall_of_fame = HallOfFame(size=25)
+        self.hall_of_fame_ = HallOfFame(size=self.hof_size)
 
         # Setup Pool of processes for parallel evaluation
         if self.n_jobs > 1:
             self.result_grid_ = ListManager.remote()
-            self.hall_of_fame = RayHallOfFame
+            self.hall_of_fame_ = RayHallOfFame.remote(size=self.hof_size)
             if not ray.is_initialized():
                 ray.init(num_cpus=self.n_jobs)
 
@@ -589,13 +597,19 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         }
 
         if self._n_cv > 1:
-            ci = stats.t.interval(
-                0.95, len(scores) - 1, loc=numpy.mean(scores), scale=stats.sem(scores)
-            )
+            try:
+                ci = stats.t.interval(
+                    0.95,
+                    len(scores) - 1,
+                    loc=numpy.mean(scores),
+                    scale=stats.sem(scores),
+                )
+            except:
+                ci = numpy.array([0.0, 0.0])
             ci = numpy.round(ci, 6)
 
-            diagnostics["95-CI Lower"] = ci[0] if not numpy.isnan(ci[0]) else 0
-            diagnostics["95-CI Upper"] = ci[1] if not numpy.isnan(ci[0]) else 0
+            diagnostics["95-CI Lower"] = ci[0]  # if not numpy.isnan(ci[0]) else 0
+            diagnostics["95-CI Upper"] = ci[1]  # if not numpy.isnan(ci[0]) else 0
             for i, score in enumerate(numpy.round(scores, 6)):
                 diagnostics[f"Fold {i + 1}"] = score
 
@@ -604,11 +618,11 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             candidate = self.mask_ * self._prepare_mask(candidate)
 
         if self.n_jobs > 1:
-            self.result_grid_.append.remote(pd.DataFrame(diagnostics))
-            self.hall_of_fame.add.remote(numpy.mean(scores), candidate)
+            self.result_grid_.append.remote(pd.DataFrame([diagnostics]))
+            self.hall_of_fame_.add.remote(numpy.mean(scores), candidate)
         else:
-            self.result_grid_.append(pd.DataFrame(diagnostics))
-            self.hall_of_fame.add(numpy.mean(scores), candidate)
+            self.result_grid_.append(pd.DataFrame([diagnostics]))
+            self.hall_of_fame_.add(numpy.mean(scores), candidate)
 
     def _prepare_mask(
         self,
@@ -700,6 +714,20 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         """
         raise NotImplementedError(
             "The _handle_priors method must be implemented by subclasses."
+        )
+
+    @abstractmethod
+    def _callback(self) -> NotImplementedError:
+        """
+        Handles the callbacks provided to the class.
+
+        Raises:
+        -------
+        :raises NotImplementedError:
+            When the method is not overridden by a subclass.
+        """
+        raise NotImplementedError(
+            "The _callback method must be implemented by subclasses."
         )
 
     def _set_estimator_params(self) -> None:

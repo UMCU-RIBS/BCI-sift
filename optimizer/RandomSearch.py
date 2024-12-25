@@ -80,8 +80,10 @@ class RandomSearch(BaseOptimizer):
         will be called at each iteration. :code: `x` and :code: `f` are the solution and
         function value, and :code: `context` contains the diagnostics of the current
         iteration.
-    :param n_jobs: Union[int, float], default = -1
+    :param n_jobs: int, default = -1
         The number of parallel jobs to run during cross-validation; -1 uses all cores.
+    :param hof_size: int, default = 1
+        The number of seats in the hall of fame (best solutions).
     :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
     :param verbose: Union[bool, int], default = False
@@ -148,6 +150,7 @@ class RandomSearch(BaseOptimizer):
         callback: Optional[Callable] = None,
         # Misc
         n_jobs: int = -1,
+        hof_size: int = 1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
@@ -167,6 +170,7 @@ class RandomSearch(BaseOptimizer):
             prior,
             callback,
             n_jobs,
+            hof_size,
             random_state,
             verbose,
         )
@@ -235,7 +239,7 @@ class RandomSearch(BaseOptimizer):
                 )
                 break
             elif self.callback is not None:
-                if self.callback(self.iter_, self.n_perturbations, self.result_grid_):
+                if self._callback():
                     progress_bar.set_postfix(
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )
@@ -298,6 +302,18 @@ class RandomSearch(BaseOptimizer):
     def _handle_prior(self):
         """Placeholder Function"""
         return None
+
+    def _callback(self) -> Union[None, bool]:
+        """
+        Handles the callbacks provided to the class.
+
+        Returns:
+        --------
+        :return Union[None, bool]:
+            Returns None, True or False depending on the callback function provided.
+        """
+        return self.callback(self.iter_, self.n_perturbations, self.result_grid_)
+
 
     @ray.remote
     def _objective_function_wrapper(self, mask: numpy.ndarray) -> float:

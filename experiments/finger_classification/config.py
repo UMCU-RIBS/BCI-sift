@@ -100,7 +100,7 @@ _C.SUBGRID.DIMS = (2, 1, 3)  # (1, 2)  #
 # Optimizer options: 'RS', 'SES', 'SSHC', 'RFE', 'EA', 'SA', 'PSO'
 _C.SUBGRID.OPTIMIZERS = ["RS", "RFE", "EA", "SA", "PSO"]
 # With or without hyperparameter tuning
-_C.SUBGRID.HP = True
+_C.SUBGRID.HP = False
 # Number of hyperparameter searches
 _C.SUBGRID.SAMPLES = 10
 # Number of hyperparameter searches

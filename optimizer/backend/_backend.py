@@ -9,8 +9,8 @@
 import os
 import pickle
 import re
+import time
 from collections import OrderedDict
-from time import time
 from typing import Tuple, List, Union, Dict, Any
 
 import numpy
@@ -29,11 +29,11 @@ class PerfTimer:
         self.duration: float = 0.0
 
     def __enter__(self) -> "PerfTimer":
-        self.start = time.perf_counter()
+        self.start = time.time()
         return self
 
     def __exit__(self, *args: Any) -> None:
-        self.duration = time.perf_counter() - self.start
+        self.duration = time.time() - self.start
 
 
 class SimulatedAnnealingReporter:

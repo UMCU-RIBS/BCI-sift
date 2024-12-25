@@ -1,4 +1,7 @@
+import os
+
 import ray
+from cloudpickle import cloudpickle
 
 from optimizer.backend._backend import HallOfFame
 
@@ -77,3 +80,14 @@ class ListManager:
         """Get the number of results stored."""
         return len(self.results)
 
+
+@ray.remote
+class RayHallOfFame(HallOfFame):
+    def save(self, filename=None):
+        with open(filename, "wb") as f:
+            cloudpickle.dump(self.hall_of_fame, f)
+
+    def load(self, filename=None):
+        if os.path.exists(filename):
+            with open(filename, "rb") as f:
+                self.hall_of_fame = cloudpickle.load(f)

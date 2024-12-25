@@ -186,8 +186,10 @@ class ParticleSwarmOptimization(BaseOptimizer):
         will be called at each iteration. :code: `x` and :code: `f` are the solution and
         function value, and :code: `context` contains the diagnostics of the current
         iteration.
-    :param n_jobs: Union[int, float], default = -1
-        The number of parallel jobs to run during cross-validation; -1 uses all cores.
+    :param n_jobs: int, default = -1
+       The number of parallel jobs to run during cross-validation; -1 uses all cores.
+    :param hof_size: int, default = 1
+        The number of seats in the hall of fame (best solutions).
     :param random_state: int, optional
         Setting a seed to fix randomness (for reproducibility).
     :param verbose: Union[bool, int], default = False
@@ -301,6 +303,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
         callback: Optional[Callable] = None,
         # Misc
         n_jobs: int = -1,
+        hof_size: int = 1,
         random_state: Optional[int] = None,
         verbose: Union[bool, int] = False,
     ) -> None:
@@ -320,6 +323,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
             prior,
             callback,
             n_jobs,
+            hof_size,
             random_state,
             verbose,
         )
@@ -417,7 +421,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
                 )
                 break
             elif self.callback is not None:
-                if self.callback(self.iter_, self.n_particles, self.result_grid_):
+                if self._callback():
                     progress_bar.set_postfix(
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )
@@ -474,9 +478,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
         :return: numpy.ndarray
             Cost-matrix for the given swarm.
         """
-        positions_split = numpy.array_split(
-            swarm.position, swarm.position.shape[0]
-        )
+        positions_split = numpy.array_split(swarm.position, swarm.position.shape[0])
 
         # fmt: off
         # Use multiprocessing pool to compute scores in parallel
@@ -552,6 +554,17 @@ class ParticleSwarmOptimization(BaseOptimizer):
             f"the size of the dimensions to be considered or be the"
             f" position-matrix of the particles (n_particles, features)."
         )
+
+    def _callback(self) -> Union[None, bool]:
+        """
+        Handles the callbacks provided to the class.
+
+        Returns:
+        --------
+        :return Union[None, bool]:
+            Returns None, True or False depending on the callback function provided.
+        """
+        return self.callback(self.iter_, self.n_particles, self.result_grid_)
 
     @ray.remote
     def _objective_function_wrapper(self, particle: numpy.ndarray) -> float:

@@ -342,10 +342,10 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
 
         # Setup Pool of processes for parallel evaluation
         if self.n_jobs > 1:
+            if not ray.is_initialized():
+                ray.init(num_cpus=self.n_jobs, log_to_driver=False)  # True = debug
             self.result_grid_ = ListManager.remote()
             self.hall_of_fame_ = RayHallOfFame.remote(size=self.hof_size)
-            if not ray.is_initialized():
-                ray.init(num_cpus=self.n_jobs)
 
         return (
             self.fit_joint()
@@ -597,19 +597,13 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         }
 
         if self._n_cv > 1:
-            try:
-                ci = stats.t.interval(
-                    0.95,
-                    len(scores) - 1,
-                    loc=numpy.mean(scores),
-                    scale=stats.sem(scores),
-                )
-            except:
-                ci = numpy.array([0.0, 0.0])
+            ci = stats.t.interval(
+                0.95, len(scores) - 1, loc=numpy.mean(scores), scale=stats.sem(scores)
+            )
             ci = numpy.round(ci, 6)
 
-            diagnostics["95-CI Lower"] = ci[0]  # if not numpy.isnan(ci[0]) else 0
-            diagnostics["95-CI Upper"] = ci[1]  # if not numpy.isnan(ci[0]) else 0
+            diagnostics["95-CI Lower"] = ci[0] if not numpy.isnan(ci[0]) else 0
+            diagnostics["95-CI Upper"] = ci[1] if not numpy.isnan(ci[0]) else 0
             for i, score in enumerate(numpy.round(scores, 6)):
                 diagnostics[f"Fold {i + 1}"] = score
 

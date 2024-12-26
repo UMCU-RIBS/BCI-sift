@@ -8,9 +8,12 @@
 import math
 import os
 import warnings
-from typing import Dict, Any, Union, List
+from collections import OrderedDict
+from typing import Dict, Any, Union, List, Tuple
 
+import numpy
 import ray
+from cloudpickle import cloudpickle
 from ray import tune, train
 from ray.tune.schedulers import AsyncHyperBandScheduler, MedianStoppingRule
 from ray.tune.search.ax import AxSearch
@@ -79,6 +82,44 @@ def ray_callback(iteration, n_individuals, context):
         ray.train.report(report)
 
 
+def train_optimizer(
+    config: Dict[str, Any],
+    estimator: Any,
+    data: Tuple[numpy.ndarray, numpy.ndarray],
+    warm_restarts: bool,
+    temp_path: str,
+):
+    X, y = data
+    # hall_of_fame = ray.get(object_store_ref["hall_of_fame"])
+
+    estimator_params = {param: config[param] for param in config}
+    file_name = "_".join(f"{k}-{v}" for k, v in estimator_params.items()).rstrip("-")
+
+    estimator_params["callback"] = ray_callback
+
+    # hall_of_fame = HallOfFame(size=1)
+
+    # # if warm_restarts and hall_of_fame:
+    # if train.get_checkpoint():
+    #     with train.get_checkpoint().as_directory() as checkpoint_dir:
+    #         with open(os.path.join(checkpoint_dir, "hall_of_fame.ckpt"), "rb") as fp:
+    #             hall_of_fame = cloudpickle.load(fp)
+    #             best_mask = hall_of_fame[max(hall_of_fame.keys())]
+    #
+    #     if info['warm_restarts']:
+    #         estimator_params["prior"] = best_mask
+
+    estimator = estimator.set_params(**estimator_params)
+    estimator.fit(X, y)
+
+    file_path = os.path.abspath(os.path.join(temp_path, f"{file_name}.ckpt"))
+    with open(file_path, "wb") as fp:
+        cloudpickle.dump(
+            estimator.hall_of_fame_.hall_of_fame.items(),
+            fp,
+        )
+
+
 class DecoderOptimization:
     """
     Class for managing the hyperparameter optimization process using Ray Tune.
@@ -112,11 +153,9 @@ class DecoderOptimization:
         max_concurrent: int = 1,
         search_scheduler: str = "AsyncHyperBand",
         search_optimizer: str = "HEBO",
-        #warm_restarts: bool = False,
+        warm_restarts: bool = False,
         n_jobs: int = -1,
     ) -> None:
-        self.info = {key: value for key, value in locals().items() if key != "self"}
-
         self.estimator = estimator
         self.param_dist = param_dist
         self.prior_dist = prior_dist
@@ -130,7 +169,7 @@ class DecoderOptimization:
 
         self.search_scheduler = search_scheduler
         self.search_optimizer = search_optimizer
-        #self.warm_restarts = warm_restarts
+        self.warm_restarts = warm_restarts
         self.n_jobs = n_jobs
 
         self.exp_name = exp_name
@@ -139,47 +178,6 @@ class DecoderOptimization:
             if isinstance(estimator, Pipeline)
             else estimator.__class__.__name__
         )
-
-        # filename=f"/{estimator.__class__.__name__}_hall_of_fame.pkl",
-
-    @staticmethod
-    def train(
-        config: Dict[str, Any],
-        info: Dict[str, Any],
-        # warm_restarts: bool,
-        object_store_ref: Dict[str, ray.ObjectRef],
-    ):
-        # warm_restarts = info["warm_restarts"]
-
-        fs_transformer = ray.get(object_store_ref["estimator"])
-        X, y = ray.get(object_store_ref["data"])
-        # hall_of_fame = ray.get(object_store_ref["hall_of_fame"])
-
-        estimator_params = {param: config[param] for param in config}
-        estimator_params["callback"] = ray_callback
-
-        #hall_of_fame = HallOfFame(size=1)
-
-        # # if warm_restarts and hall_of_fame:
-        # if train.get_checkpoint():
-        #     with train.get_checkpoint().as_directory() as checkpoint_dir:
-        #         with open(os.path.join(checkpoint_dir, "hall_of_fame.ckpt"), "rb") as fp:
-        #             hall_of_fame = cloudpickle.load(fp)
-        #             best_mask = hall_of_fame[max(hall_of_fame.keys())]
-        #
-        #     if info['warm_restarts']:
-        #         estimator_params["prior"] = best_mask
-
-        fs_transformer = fs_transformer.set_params(**estimator_params)
-        fs_transformer.fit(X, y)
-
-
-        # results = fs_transformer.result_grid_
-        # max_score_index = results["Score"].idxmax()
-        # hall_of_fame[results.loc[max_score_index, "Score"]] = results.loc[
-        #     max_score_index, "Mask"
-        # ]
-        # hall_of_fame[numpy.max(fs_transformer.score_)] = fs_transformer.mask_
 
     def optimize(self, X: Any, y: Any) -> None:
         """
@@ -193,15 +191,12 @@ class DecoderOptimization:
 
         ray.init(num_cpus=self.n_jobs)
 
-        refs = {
-            "estimator": ray.put(self.estimator),
-            "data": ray.put(tuple([X, y])),
-        }
-
-        out_path_model = os.path.join(self.out_path, self.name)
+        out_path_model = os.path.abspath(os.path.join(self.out_path, self.name))
         os.makedirs(out_path_model, exist_ok=True)
 
+        temp_path = os.path.abspath(os.path.join(out_path_model, "hall_of_fame"))
         dir_results = os.path.abspath(os.path.join(out_path_model, "ray_results"))
+        os.makedirs(temp_path, exist_ok=True)
         os.makedirs(dir_results, exist_ok=True)
 
         print(
@@ -209,7 +204,7 @@ class DecoderOptimization:
             f"\n-----------------------------------------------------------"
         )
 
-        cpu_per_sample = (self.n_jobs) / self.max_concurrent
+        cpu_per_sample = self.n_jobs / self.max_concurrent
 
         print(f"\nInitialize Search Optimization Schedule...")
 
@@ -218,10 +213,11 @@ class DecoderOptimization:
 
         analysis = tune.run(
             tune.with_parameters(
-                self.train,
-                info=self.info,
-                # warm_restarts=self.warm_restarts,
-                object_store_ref=refs,
+                train_optimizer,
+                estimator=self.estimator,
+                data=(X, y),
+                warm_restarts=self.warm_restarts,
+                temp_path=temp_path,
             ),
             name=self.exp_name,
             scheduler=sched,
@@ -232,25 +228,32 @@ class DecoderOptimization:
             },
             config=self.param_dist,
             resources_per_trial=tune.PlacementGroupFactory(
-                [{"CPU": 0.1 * cpu_per_sample}]
-                + [{"CPU": 0.9 * cpu_per_sample}] * self.max_concurrent
+                [
+                    {"CPU": 0.1 * cpu_per_sample},
+                    {"CPU": 0.9 * cpu_per_sample},
+                    # {"CPU": (0.9 * cpu_per_sample) ** 0.5},
+                ]
+                * self.max_concurrent
             ),
             max_concurrent_trials=self.max_concurrent,  # TODO adjust
             # {"cpu": cpu_per_sample},
             num_samples=self.num_samples,
+            # callbacks=[
+            #     WandbLoggerCallback(
+            #         project=self.name,
+            #         tags=f"{self.__class__.__name__}_{datetime.now().strftime('%Y-%m_%d_%H:%M')}",
+            #     )
+            # ],
             checkpoint_at_end=False,
             local_dir=dir_results,
             trial_name_creator=get_trial_name,
             checkpoint_score_attr=self.metric,
             verbose=1,
         )
-
-        # self.hall_of_fame_ = ray.get(hall_of_fame).get.remote()
-        # print(self.hall_of_fame_)
-        # self.score_ = max(self.hall_of_fame_.keys())
-        # self.mask_ = self.hall_of_fame_[self.score_]
-
         self.result_grid_ = analysis.dataframe()
+        self.hall_of_fame_ = self.load_hall_of_fame(temp_path)
+
+        self.mask_ = self.hall_of_fame_[max(self.hall_of_fame_.keys())]
 
         ray.shutdown()
 
@@ -293,7 +296,7 @@ class DecoderOptimization:
                 reduction_factor=4,
                 brackets=4,
             )
-        elif self.search_scheduler == "MedianStop":
+        elif self.search_scheduler == "MS":
             return MedianStoppingRule(
                 time_attr="training_iteration",
                 metric=self.metric,
@@ -323,3 +326,29 @@ class DecoderOptimization:
         if self.search_scheduler:
             exp_name += f"_{self.search_scheduler}"
         return exp_name
+
+    @staticmethod
+    def load_hall_of_fame(temp_path):
+        concatenated_dict = OrderedDict()
+
+        # Iterate over all files in the temp_path directory
+        for file_name in os.listdir(temp_path):
+            if file_name.endswith(".ckpt"):  # Check if file is a model checkpoint file
+                model_path = os.path.join(temp_path, file_name)
+
+                try:
+                    # Load the model
+                    with open(model_path, "rb") as fp:
+                        model_dict = cloudpickle.load(fp)
+
+                        # Check if the model is an OrderedDict, and concatenate
+                        if isinstance(model_dict, OrderedDict):
+                            concatenated_dict.update(model_dict)
+                        else:
+                            print(
+                                f"Warning: {file_name} is not an OrderedDict, skipping."
+                            )
+                except Exception as e:
+                    print(f"Error loading {file_name}: {e}")
+
+        return concatenated_dict

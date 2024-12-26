@@ -186,7 +186,7 @@ def channel_combination_serarch(
                 dc = DecoderOptimization(
                     estimator=clf, param_dist=param_space, prior_dist = [{"estimator_params": {"C": 1.0}}],
                     max_iter=max_iter, batch_size=batch_size, num_samples=config.SUBGRID.SAMPLES, exp_name=method, metric=config.SUBGRID.METRIC,
-                    search_optimizer="HEBO", search_scheduler='ASHA', out_path=output_path, max_concurrent=config.SUBGRID.MAX_CONCURRENT, n_jobs=n_jobs)
+                    search_optimizer="HEBO", search_scheduler='MS', out_path=output_path, max_concurrent=config.SUBGRID.MAX_CONCURRENT, n_jobs=n_jobs)
                 dc.optimize(X=X, y=y)
                 result_grids.append(dc.result_grid_)
             else:

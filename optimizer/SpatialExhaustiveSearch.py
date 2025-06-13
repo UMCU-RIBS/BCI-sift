@@ -1,23 +1,26 @@
 # -------------------------------------------------------------
-# Channel Elimination
+# BCI-FeaST
 # Copyright (c) 2024
 #       Dirk Keller,
+#       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
-
-from typing import Tuple, List, Union, Dict, Any, Optional, Type
+import multiprocessing
+from functools import partial
+from typing import Tuple, Union, Dict, Any, Optional, List, Callable
 
 import numpy
+import ray
+import numpy as np
 import pandas as pd
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
-from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
+from tqdm import tqdm
 
-from .utils import compute_subgrid_dimensions
+from .Base_Optimizer import BaseOptimizer
+from .backend._backend import compute_subgrid_dimensions
 
-from ._Base_SES import SpatialExhaustiveSearch as SES
-from ._Base_Optimizer import BaseOptimizer
 
 class SpatialExhaustiveSearch(BaseOptimizer):
     """
@@ -26,25 +29,51 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
     Parameters:
     -----------
-    :param grid: numpy.ndarray
-        The grid structure specifying how channels are arranged.
+    Parameters:
+    -----------
+    :param dimensions: Tuple[int, ...]
+        A tuple of dimensions indies tc apply the feature selection onto. Any
+        combination of dimensions can be specified, except for dimension 'zero', which
+        represents the samples.
     :param estimator: Union[Any, Pipeline]
-        The machine learning estimator or pipeline to evaluate
-        channel combinations.
-    :param metric: str, default = 'f1_weighted'
-        The metric to optimize, compatible with scikit-learn metrics.
-    :param cv: Union[BaseCrossValidator, int], default = 10
-        Cross-validation splitting strategy, can be a fold number
-        or a scikit-learn cross-validator.
-    :param groups: numpy.ndarray, default = None
-        Groups for LeaveOneGroupOut-crossvalidator
-    :param n_jobs: int, default = 1
-        Number of parallel jobs to run during cross-validation.
-         '-1' uses all available cores.
-    :param seed: Optional[int], default = None
-        Seed for randomness, ensuring reproducibility.
+        The machine learning model or pipeline to evaluate feature sets.
+    :param estimator_params: Dict[str, any], optional
+        Optional parameters to adjust the estimator parameters.
+    :param scoring: str, default = 'f1_weighted'
+        The metric to optimize. Must be scikit-learn compatible.
+    :param cv: Union[BaseCrossValidator, int, float], default = 10
+        The cross-validation strategy or number of folds. If an integer is passed,
+        :code:`train_test_split` for <1 and :code:`BaseCrossValidator` is used for >1 as
+        default. A float below 1 represents the percentage of training samples for the
+        train-test split ratio.
+    :param groups: Optional[numpy.ndarray], optional
+        Groups for a LeaveOneGroupOut generator.
+    :param strategy: str, default = "joint"
+        The strategy of optimization to apply. Valid options are: 'joint' and
+        'conditional'.
+        * Joint Optimization: Optimizes all features simultaneously. Should be only
+          selected for small search spaces.
+        * Conditional Optimization: Optimizes each feature dimension iteratively,
+          building on previous results. Generally, yields better performance for large
+          search spaces.
+    :param patience: Union[int Tuple[int, ...], default = int(1e5)
+        Patience parameter has no effect but is kept for consistency.
+    :param bounds: Tuple[float, float], default = (0.0, 1.0)
+        Bounds parameter has no effect but is kept for consistency.
+    :param prior: numpy.ndarray, optional
+        Prior parameter has no effect but is kept for consistency.
+    :param callback: Callable, optional
+        A callback function of the structure :code: `callback(x, f, context)`, which
+        will be called at each iteration. :code: `x` and :code: `f` are the solution and
+        function value, and :code: `context` contains the diagnostics of the current
+        iteration.
+    :param n_jobs: Union[int, float], default = -1
+        The number of parallel jobs to run during cross-validation; -1 uses all cores.
+    :param random_state: int, optional
+        Random State parameter has no effect but is kept for consistency.
     :param verbose: Union[bool, int], default = False
-        Enables verbose output during the optimization process.
+         If set to True, enables the output of progress status during the optimization
+         process.
 
     Methods:
     --------
@@ -64,14 +93,21 @@ class SpatialExhaustiveSearch(BaseOptimizer):
     - importance_plot:
         Generate and save a heatmap visualizing the importance of each channel.
 
+    Methods:
+    --------
+    - fit:
+        Fit the optimizer to the data.
+    - transform:
+        Transform the input data using the mask from the optimization process.
+
     Notes:
     ------
-    This implementation is semi-compatible with the scikit-learn
-    framework, which builds around two-dimensional feature matrices.
-    To use this transformation within a scikit-learn Pipeline, the
-    four dimensional data must eb flattened after the first dimension
-    [samples, features]. For example, scikit-learn's FunctionTransformer can
-    achieve this.
+    This implementation is semi-compatible with the scikit-learn framework, which builds
+    around two-dimensional feature matrices. To use this transformation within a
+    scikit-learn Pipeline, the four dimensional data must be flattened after the first
+    dimension [samples, features]. For example, scikit-learn's
+    :code: `FunctionTransformer` can achieve this.
+
 
     Examples:
     ---------
@@ -103,109 +139,327 @@ class SpatialExhaustiveSearch(BaseOptimizer):
     """
 
     def __init__(
-            self,
-
-            # General and Decoder
-            grid: numpy.array,
-            estimator: Union[Any, Pipeline],
-            metric: str = 'f1_weighted',
-            cv: Union[BaseCrossValidator, int] = 10,
-            groups: numpy.ndarray = None,
-
-            # Misc
-            n_jobs: int = 1,
-            seed: Optional[int] = None,
-            verbose: Union[bool, int] = False
+        self,
+        # General and Decoder
+        dimensions: Tuple[int, ...],
+        feature_space: str,
+        estimator: Union[Any, Pipeline],
+        estimator_params: Optional[Dict[str, any]] = None,
+        scoring: str = "f1_weighted",
+        cv: Union[BaseCrossValidator, int, float] = 10,
+        groups: Optional[numpy.ndarray] = None,
+        strategy: str = "joint",
+        #grid: numpy.ndarray = None,
+        # Training Settings
+        tol: Union[Tuple[int, ...], float] = 1e-5,
+        patience: Union[Tuple[int, ...], int] = int(1e5),
+        bounds: Tuple[float, float] = (0.0, 1.0),
+        prior: Optional[numpy.ndarray] = None,
+        callback: Optional[Callable] = None,
+        # Misc
+        n_jobs: int = -1,
+        random_state: Optional[int] = None,
+        verbose: Union[bool, int] = False,
     ) -> None:
-        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose)
 
-    def fit(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> Type['SpatialExhaustiveSearch']:
-        """
-        Fit method optimizes the channel combination with
-        Spatial Exhaustive Search.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -----------
-        :return: Type['SpatialExhaustiveSearch']
-        """
-        self.X_ = X
-        self.y_ = y
-
-        self.iter_ = int(0)
-        self.result_grid_ = []
-
-        self.solution_, self.mask_, self.score_ = self.run()
-
-        # Conclude the result grid (Calculate the Size and Height)
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
-        self.result_grid_[['Height', 'Width']] = self.result_grid_['Mask'].apply(
-            lambda mask: pd.Series(compute_subgrid_dimensions(mask))
+        super().__init__(
+            dimensions,
+            feature_space,
+            estimator,
+            estimator_params,
+            scoring,
+            cv,
+            groups,
+            strategy,
+            tol,
+            patience,
+            bounds,
+            prior,
+            callback,
+            n_jobs,
+            random_state,
+            verbose,
         )
-        columns = list(self.result_grid_.columns)
-        size_index = columns.index('Size')
-        new_order = columns[:size_index + 1] + ['Height', 'Width'] + columns[size_index + 1:-2]
-        self.result_grid_ = self.result_grid_[new_order]
 
-        return self
-
-    def transform(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
+    #TODO: fix naming & documentation of this method
+    def _compute_objective(
+        self,
+        random_perturbations: numpy.ndarray,
     ) -> numpy.ndarray:
         """
-        Transforms the input with the mask obtained from
-        the solution of Spatial Exhaustive Search.
+        Generate random masks and compute their objective function scores. This method
+        allows the RS algorithm to interface correctly with the objective function by
+        converting the input mask tensor into individuals and evaluating them.
 
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
+        If more than one cpu core is passed, then the evaluation of the particles is
+        done in parallel using multiple processes.
 
-        Return:
-        -----------
-        :return: numpy.ndarray
-            Returns a filtered array-like with dimensions
-            [samples, channel_height, channel_width, time]
+        Parameters
+        ----------
+        :param random_perturbations: numpy.ndarray
+            The random generated perturbations.
+
+        Returns
+        -------
+        numpy.ndarray
+            The performance-matrix for a collection of masks.
         """
-        sklearn_is_fitted(self)
+        positions_split = numpy.array_split(
+            random_perturbations, random_perturbations.shape[0]
+        )
 
-        return X[:, self.mask_, :]
+        # fmt: off
+        # Use multiprocessing pool to compute scores in parallel
+        if self.n_jobs > 1:
+            return ray.get(
+                [self._objective_function_wrapper.remote(self, pos) for pos in positions_split]
+            )
+        # If no pool is provided, compute scores sequentially
+        else:
+            penalty_weight = 0 #TODO: have as parameter
+            return [self._objective_function(pos) - penalty_weight*numpy.sum(numpy.array(pos) > 0.5)/len(pos[0]) for pos in positions_split] #TODO: put somewhere better (talk to Dirk)
+        #[self._objective_function(pos) for pos in positions_split]
+        # fmt: on
 
-    def run(
-            self
-    ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
+    #TODO: remove this method
+    # @staticmethod
+    # def compute_objective_function(
+    #     mask: numpy.ndarray, objective_func: Callable, pool: multiprocessing.Pool = None
+    # ):
+    #     """
+    #     Evaluate particles using the objective function
+
+    #     This method evaluates each particle in the swarm according to the
+    #     objective function passed.
+
+    #     If a pool is passed, then the evaluation of the particles is done in
+    #     parallel using multiple processes.
+
+    #     Parameters
+    #     ----------
+    #     :param swarm : Swarm
+    #         A Swarm instance
+    #     :param objective_func : Callable
+    #         Objective function to be evaluated
+    #     :param pool: multiprocessing.Pool, optional
+    #         The pool to be used for parallel particle evaluation
+
+    #     Returns
+    #     -------
+    #     :return: numpy.ndarray
+    #         Cost-matrix for the given swarm
+    #     """
+    #     if pool is None:
+    #         return objective_func(mask)
+    #     else:
+    #         results = pool.map(
+    #             partial(objective_func),
+    #             numpy.array_split(mask, pool._processes),
+    #         )
+    #         return numpy.concatenate(results)
+
+    def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
-        Executes the Spatial Exhaustive Search.
-
-        Parameters:
-        --------
-        :return: Tuple[numpy.ndarray, float]
-            The best channel configuration and its score.
+        Runs the exhaustive search algorithm to optimize the feature configuration, by
+        evaluating the objective function :code:`f` for all possible feature
+        combinations.
 
         Returns:
         --------
-        :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
-            A tuple with the solution, mask, the evaluation scores and the optimization history.
+        Tuple[numpy.ndarray, numpy.ndarray, float]
+            The best solution, mask found and their score.
         """
-        # Initialize and run the SES optimizer
-        es = SES(
-            func=self.objective_function,
-            channel_grid=self.grid,
-            verbose=self.verbose
-        )
-        score, mask = es.run()
+        if len(self.dimensions) != 2:
+            raise ValueError(
+                f"Only two dimensions are allowed. Got {len(self.dimensions)}."
+            )
+        if self.strategy == "conditional":
+            raise ValueError(
+                f"Spatial exhaustive Search requires access to all dimensions at the"
+                f" same time, hence only joint is allowed. Got {len(self.strategy)}."
+            )
 
-        solution = mask.reshape(-1).astype(float)
-        best_state = mask
-        best_score = score * 100
+        wait = 0
+        best_score = 0.0
+        best_state = None
+
+        # Main loop over the number of starting positions
+        grid = np.arange(1, np.prod(self._dim_size) + 1).reshape(self._dim_size)
+        subgrids = self._generate_subgrids(*grid.shape)
+
+        total_iterations = len(subgrids)
+        chunk_size = max(total_iterations // self.n_jobs, self.n_jobs) #self.n_jobs*5 #
+        print(chunk_size)
+        chunks = [
+            subgrids[i : i + chunk_size] for i in range(0, total_iterations, chunk_size) #total_iterations
+        ]
+
+        # pool = None
+        # if self.n_jobs > 1:
+        #     self.result_grid_ = multiprocessing.Manager().list()
+        #     pool = multiprocessing.Pool(self.n_jobs)
+
+        progress_bar = tqdm(
+            range(len(chunks)), #range(chunk_size)
+            desc=self.__class__.__name__,
+            postfix=f"{best_score:.6f}",
+            disable=not self.verbose,
+            leave=True,
+        )
+        for iteration in progress_bar:
+            mask = np.zeros((chunk_size, *grid.shape), dtype=bool)
+
+            for i in range(len(chunks[iteration])):
+                start_row, start_col, end_row, end_col = chunks[iteration][i]
+                mask[i, start_row:end_row, start_col:end_col] = True
+
+            scores = self._compute_objective(
+                mask
+            )
+
+            # Update logs and early stopping
+            wait += 1
+            score = numpy.max(scores)
+            if best_score < score:
+                if score - best_score > self._tol:
+                    wait = 0
+                best_score = score
+                best_state = mask[scores == score]
+                best_state = best_state[numpy.random.choice(best_state.shape[0])]
+            progress_bar.set_postfix(best_score=f"{best_score:.6f}")
+            if wait > self._patience:
+                progress_bar.set_postfix(
+                    best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
+                )
+                break
+            elif score >= 1.0:
+                progress_bar.set_postfix(
+                    best_score=f"Maximum score reached: {best_score:.6f}"
+                )
+                break
+            elif self.callback is not None:
+                if self.callback(best_score, best_state, self.result_grid_):
+                    progress_bar.set_postfix(
+                        best_score=f"Stopped by callback: {best_score:.6f}"
+                    )
+                    break
+            # # Calculate the score for the current subgrid and update if it's the best score
+            # if (score := self._objective_function(mask)) > best_score:
+            #     best_score, best_state = score, mask
+            #     progress_bar.set_postfix(best_score=f"{best_score:.6f}")
+            #     if abs(best_score - score) > self.tol:
+            #         wait = 0
+            # if wait > self.patience or score >= 1.0:
+            #     progress_bar.write(f"\nMaximum score reached")
+            #     break
+            # wait += 1
+
+        solution = best_state.reshape(-1).astype(float)
+        #best_state = self._prepare_mask(best_state)
+        best_score *= 100
         return solution, best_state, best_score
+
+    def _handle_bounds(self) -> None:
+        """
+        Placeholder method for handling bounds.
+
+        Returns:
+        -------
+        :returns: None
+        """
+
+    def _handle_prior(self) -> None:
+        """
+        Placeholder method for handling prior.
+
+        Returns:
+        -------
+        :returns: None
+        """
+
+    @staticmethod
+    def _generate_subgrids(
+        grid_height: int, grid_width: int
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        Generates all possible subgrids within a given grid height and width.
+        Each subgrid is defined by its starting and ending coordinates.
+
+        Parameters:
+        -----------
+        :param grid_height: int
+            The height of the grid.
+        :param grid_width: int
+            The width of the grid.
+
+        Returns:
+        --------
+        :return: List[Tuple[int, int, int, int]]
+            A list of tuples, where each tuple contains the coordinates of a subgrid in the format
+            (start_row, start_col, end_row, end_col).
+        """
+        subgrids = []
+        for start_row in range(grid_height + 1):
+            for start_col in range(grid_width + 1):
+                for end_row in range(start_row, grid_height + 1):
+                    for end_col in range(start_col, grid_width + 1):
+                        if start_row < end_row and start_col < end_col:
+                            subgrids.append((start_row, start_col, end_row, end_col))
+        return subgrids
+
+    def _prepare_result_grid(self) -> None:
+        """
+        Finalizes the result grid. For the Spatial Exhaustive Search, the height
+        and width of the included area is added.
+
+        Returns:
+        --------
+        returns: None
+        """
+        if self.n_jobs > 1:
+            self.result_grid_ = pd.concat(
+                ray.get(self.result_grid_.get.remote()), axis=0, ignore_index=True
+            )
+        else:
+            self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
+
+        # Compute the height and width for each mask and assign them to the result grid
+        self.result_grid_[["Height", "Width"]] = self.result_grid_["Mask"].apply(
+            lambda mask: pd.Series(
+                compute_subgrid_dimensions(
+                    mask.reshape(
+                        tuple(np.array(self._X.shape)[np.array(self.dimensions)])
+                    )
+                )
+            )
+        )
+
+        # Reorder the columns to place 'Height' and 'Width' after 'Size'
+        columns = list(self.result_grid_.columns)
+        size_index = columns.index("Size")
+        new_order = (
+            columns[: size_index + 1]
+            + ["Height", "Width"]
+            + columns[size_index + 1 : -2]
+        )
+        self.result_grid_ = self.result_grid_[new_order]
+
+
+    @ray.remote
+    def _objective_function_wrapper(self, mask: numpy.ndarray) -> float:
+        """
+        Wraps the objective function to adapt it for compatibility with ray's cpu
+        parallelization.
+
+        Parameters:
+        -----------
+        mask : numpy.ndarray
+            An individual mask representing potential solutions.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            The mask performanc score.
+        """
+        penalty_weight = 0 #TODO: have as parameter
+        return self._objective_function(mask) - penalty_weight*numpy.sum(numpy.array(mask) > 0.5)/len(mask[0]) #TODO: put somewhere better (talk to Dirk)

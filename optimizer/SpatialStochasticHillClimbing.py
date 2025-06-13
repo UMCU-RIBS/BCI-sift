@@ -1,28 +1,242 @@
 # -------------------------------------------------------------
-# Channel Elimination
+# BCI-FeaST
 # Copyright (c) 2024
 #       Dirk Keller,
+#       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]
 # -------------------------------------------------------------
 
 import random
 from copy import copy
-from typing import Tuple, List, Union, Dict, Any, Optional, Type
+from typing import Tuple, List, Union, Dict, Any, Optional, Callable, Type
 
 import numpy
 import numpy as np
 import pandas as pd
-
+import ray
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
-# from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
-from sklearn.utils.validation import check_is_fitted as sklearn_is_fitted
+from tqdm import tqdm
 
-from .utils import to_dict_keys, compute_subgrid_dimensions
+from optimizer.backend._backend import to_str, compute_subgrid_dimensions
+from .Base_Optimizer import BaseOptimizer
 
-from ._Base_SSHC import SpatialStochasticHillClimbing as SSHC
-from ._Base_Optimizer import BaseOptimizer
+
+class RectangleSubgridExpansion:
+    """
+    Manages the expansion of a rectangular subgrid within a channel grid,
+    starting from a given position.
+
+    Parameters:
+    -----------
+    :param channel_grid: numpy.ndarray
+        The grid representing channels, where each cell's value
+        corresponds to a unique channel ID.
+    :param start_pos: int
+        The channel ID from which the subgrid expansion starts.
+
+    Methods:
+    --------
+    - generate_boolean_mask:
+        Creates a boolean mask from the starting position.
+    - get_subgrid_corners:
+        Identifies corners of the subgrid based on the mask.
+    - adjacent_channel_corners:
+        Calculates corners of channels adjacent to a given subgrid.
+    - get_adjacent_channels:
+        Identifies channels adjacent to the subgrid using the current mask.
+    - determine_directions:
+        Determines possible expansion directions based on adjacent channels.
+    - expand_subgrid:
+        Expands the subgrid to include new channels.
+
+    Returns:
+    --------
+    returns: None
+    """
+
+    def __init__(self, channel_grid: numpy.ndarray, start_pos: int) -> None:
+        self.channel_grid = channel_grid
+        self.mask, self.incl_channels = self.generate_boolean_mask(
+            channel_grid, start_pos
+        )
+        self.subgrid_corners = self.get_subgrid_corners(self.mask)
+
+    @staticmethod
+    def generate_boolean_mask(
+        channel_grid: numpy.ndarray, start: int
+    ) -> Tuple[numpy.ndarray, numpy.ndarray]:
+        """
+        Generate a mask indicating the subgrid starting from a given channel,
+        along with the indices of included channels.
+
+        Parameters:
+        -----------
+        :param channel_grid: np.ndarray
+            The channel grid with the channel ID's to operate on.
+        :param start: int
+            The starting channel ID for subgrid expansion.
+
+        Return:
+        --------
+        :return: Tuple[numpy.ndarray, numpy.ndarray]
+            A tuple containing the boolean mask of the subgrid and the
+            indices of included channels.
+        """
+        subgrid = channel_grid == start
+        return subgrid, np.argwhere(subgrid)
+
+    @staticmethod
+    def get_subgrid_corners(subgrid: Union[bool, numpy.ndarray]) -> numpy.ndarray:
+        """
+        Identifies the corners of the current subgrid based on the boolean mask.
+
+        Parameters:
+        -----------
+        :param subgrid: numpy.ndarray
+            The subgrid mask to operate on.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            An array of coordinates for the corners of the subgrid.
+        """
+        # Get the coordinates of True values in subgrid
+        coordinates = np.argwhere(subgrid == True)
+
+        # Calculate the subgrid_corners (top-left, top-right, bottom-left, bottom-right)
+        row_min, col_min = coordinates.min(axis=0)
+        row_max, col_max = coordinates.max(axis=0)
+        return np.array(
+            [
+                (row_min, col_min),
+                (row_min, col_max),
+                (row_max, col_min),
+                (row_max, col_max),
+            ]
+        )
+
+    @staticmethod
+    def adjacent_channel_corners(corners: numpy.ndarray) -> numpy.ndarray:
+        """
+        Calculates the corners of adjacent channels based on the input corners.
+
+        Parameters:
+        -----------
+        :param corners: numpy.ndarray
+            An array of coordinates for the corners of a subgrid.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            An array of coordinates for the corners of adjacent channels.
+        """
+        return corners + np.array([(-1, -1), (-1, 1), (1, -1), (1, 1)])
+
+    def get_adjacent_channels(self) -> numpy.ndarray:
+        """
+        Identifies the channels adjacent to the current subgrid, considering
+        the mask's current state.
+
+        This function pads the current mask to handle edge cases and uses
+        the padded version to identify channels that are directly adjacent
+        to the subgrid. It relies on `self.get_subgrid_corners` to determine
+        the subgrid's bounds and on `self.adjacent_channel_corners` to identify
+        adjacent areas. The results of this function are used by `determine_directions`
+        to identify potential expansion directions.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            The coordinates of channels adjacent to the subgrid.
+        """
+        # Pad the mask and mark the adjacent area outside the subgrid
+        mask_pad = np.pad(self.mask.astype(int), pad_width=1, constant_values=-1)
+        adj_pad_corners = self.adjacent_channel_corners(
+            self.get_subgrid_corners(mask_pad)
+        )
+        mask_pad[
+            adj_pad_corners[0][0] : adj_pad_corners[2][0] + 1,
+            adj_pad_corners[0][1] : adj_pad_corners[1][1] + 1,
+        ] = 2
+
+        # Adjust mask_pad to mark included channels as part of the subgrid
+        # Account for the padding offset when setting included channels
+        candidate_mask = mask_pad[1:-1, 1:-1]
+        candidate_mask[self.incl_channels[:, 0], self.incl_channels[:, 1]] = 1
+
+        # Remove corner candidates
+        adj_corners = np.array(self.adjacent_channel_corners(self.subgrid_corners))
+        adj_corners = adj_corners[
+            ~np.any(
+                np.logical_or(
+                    adj_corners < 0, adj_corners >= [*self.channel_grid.shape]
+                ),
+                axis=1,
+            )
+        ]
+        if len(adj_corners):
+            candidate_mask[adj_corners[:, 0], adj_corners[:, 1]] = 0
+
+        # Extract candidate coordinates from the adjusted padded mask
+        return np.argwhere(candidate_mask == 2)
+
+    def determine_directions(self) -> List[numpy.ndarray]:
+        """
+        Determines potential expansion directions based on the positions
+        of adjacent channels.
+
+        Updates `self.subgrid_corners` with the current subgrid's corners
+        and evaluates adjacent channels to determine in which directions
+        the subgrid can potentially expand.
+
+        Returns:
+        --------
+        :return: List[numpy.ndarray]
+            A list containing the coordinates of candidates for each
+            viable expansion direction (up, down, left, right).
+        """
+        # Calculate corners of the current subgrid
+        self.subgrid_corners = self.get_subgrid_corners(self.mask)
+
+        # Identify adjacent channels
+        candidates = self.get_adjacent_channels()
+
+        # Iterate through each candidate and corner using NumPy operations
+        expand_directions = [np.empty((0, 2), dtype=int) for _ in range(4)]
+        expand_directions[0] = candidates[
+            np.where(candidates[:, 0] < self.subgrid_corners[0][0])
+        ]  # up direction
+        expand_directions[1] = candidates[
+            np.where(candidates[:, 0] > self.subgrid_corners[3][0])
+        ]  # down direction
+        expand_directions[2] = candidates[
+            np.where(candidates[:, 1] < self.subgrid_corners[2][1])
+        ]  # left direction
+        expand_directions[3] = candidates[
+            np.where(candidates[:, 1] > self.subgrid_corners[3][1])
+        ]  # right direction
+
+        # Clean empty directions from list
+        return [direction for direction in expand_directions if direction.shape[0] > 0]
+
+    def expand_subgrid(self, new_chan: np.ndarray) -> None:
+        """
+        Expands the current subgrid to include new channels.
+
+        Parameters:
+        -----------
+        :param new_chan: numpy.ndarray
+            Indices of new channels to include in the subgrid.
+
+        Returns:
+        --------
+        returns: None
+        """
+        self.mask[new_chan[:, 0], new_chan[:, 1]] = True
+        self.incl_channels = np.vstack([self.incl_channels, new_chan])
+
 
 class SpatialStochasticHillClimbing(BaseOptimizer):
     """
@@ -33,20 +247,24 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
     Parameters:
     -----------
-    :param grid: numpy.ndarray
-        The grid structure specifying how channels are arranged.
+    :param dimensions: Tuple[int, ...]
+        A tuple of dimensions indies tc apply the feature selection onto.
+        Any combination of dimensions can be specified, except for
+        dimension 'zero', which represents the samples.
     :param estimator: Union[Any, Pipeline]
-        The machine learning estimator or pipeline to evaluate
-        channel combinations.
-    :param metric: str, default = 'f1_weighted'
-        The metric to optimize, compatible with scikit-learn metrics.
+        The machine learning model or pipeline to evaluate feature sets.
+    :param estimator_params: Optional[Dict[str, any]], default = None
+         Optional parameters to adjust the estimator parameters.
+    :param scoring: str, default = 'f1_weighted'
+        The metric to optimize. Must be scikit-learn compatible.
     :param cv: Union[BaseCrossValidator, int], default = 10
-        Cross-validation splitting strategy, can be a fold number
-        or a scikit-learn cross-validator.
-    :param groups: numpy.ndarray, default = None
+        The cross-validation strategy or number of folds.
+        If an integer is passed, train_test_split() for 1 and
+        StratifiedKFold() is used for >1 as default.
+    :param groups: Optional[numpy.ndarray], default = None
         Groups for LeaveOneGroupOut-crossvalidator
     :param n_iter: int, default=100
-        Number of reinitializations for random starting positions of the algorithm.
+        Number of reinitialization for random starting positions of the algorithm.
     :param epsilon: Tuple[float, float], default = (0.75, 0.25)
         Exploration factor, a tuple indicating the starting
         and final exploration values.
@@ -56,16 +274,24 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value
         is below this for `patience` iterations, the optimization will stop early.
-    :param patience: int, default = int(1e5)
+    :param patience: int, default = 1e5
         The number of iterations for which the objective function
         improvement must be below `tol` to stop optimization.
+    :param bounds: Tuple[float, float], default = (0.0, 1.0)
+        Has no effect but is kept for consistency.
+    :param prior: Optional[numpy.ndarray], default = None
+        Explicitly initialize the optimizer state.
+        If set to None if the to be optimized features are
+        initialized randomly within the bounds.
+    :param callback: Optional[Union[Callable, Type]], default = None, #TODO adjust and add design
     :param n_jobs: int, default = 1
-        Number of parallel jobs to run during cross-validation.
-         '-1' uses all available cores.
-    :param seed: Optional[int], default = None
-        Seed for randomness, ensuring reproducibility.
+        The number of parallel jobs to run during cross-validation.
+    :param random_state: Optional[int], default = None
+        Setting a seed to fix randomness (for reproducibility).
+        Default does not use a seed.
     :param verbose: Union[bool, int], default = False
-        Enables verbose output during the optimization process.
+         If set to True, enables the output of progress status
+         during the optimization process.
 
     Methods:
     --------
@@ -122,116 +348,55 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
     """
 
     def __init__(
-            self,
-
-            # General and Decoder
-            grid: numpy.ndarray,
-            estimator: Union[Any, Pipeline],
-            metric: str = 'f1_weighted',
-            cv: Union[BaseCrossValidator, int] = 10,
-            groups: numpy.ndarray = None,
-            # Spatial Stochastic Search Settings
-            n_iter: int = 100,
-            epsilon: Tuple[float, float] = (0.75, 0.25),
-            prior: Optional[numpy.ndarray] = None,
-
-            # Training Settings
-            tol: float = 1e-5,
-            patience: int = int(1e5),
-
-            # Misc
-            n_jobs: int = 1,
-            seed: Optional[int] = None,
-            verbose: Union[bool, int] = False
+        self,
+        # General and Decoder
+        dimensions: Tuple[int, ...],
+        feature_space: str,
+        estimator: Union[Any, Pipeline],
+        estimator_params: Optional[Dict[str, any]] = None,
+        scoring: str = "f1_weighted",
+        cv: Union[BaseCrossValidator, int] = 10,
+        groups: Optional[numpy.ndarray] = None,
+        strategy: str = "joint",
+        # Spatial Stochastic Search Settings
+        n_iter: int = 100,
+        epsilon: Tuple[float, float] = (0.75, 0.25),
+        # Training Settings
+        tol: float = 1e-5,
+        patience: int = int(1e5),
+        bounds: Tuple[float, float] = (0.0, 1.0),
+        prior: Optional[numpy.ndarray] = None,
+        callback: Optional[Union[Callable, Type]] = None,
+        # Misc
+        n_jobs: int = 1,
+        random_state: Optional[int] = None,
+        verbose: Union[bool, int] = False,
     ) -> None:
 
-        super().__init__(grid, estimator, metric, cv, groups, n_jobs, seed, verbose)
+        super().__init__(
+            dimensions,
+            feature_space,
+            estimator,
+            estimator_params,
+            scoring,
+            cv,
+            groups,
+            strategy,
+            tol,
+            patience,
+            bounds,
+            prior,
+            callback,
+            n_jobs,
+            random_state,
+            verbose,
+        )
 
         # Spatial Stochastic Search Settings
         self.n_iter = n_iter
         self.epsilon = epsilon
 
-        # Training Settings
-        self.tol = tol
-        self.patience = patience
-        self.prior = prior
-
-    def fit(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> Type['SpatialStochasticHillClimbing']:
-        """
-        Fit method optimizes the channel combination with
-        Spatial Stochastic Hill Climbing.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -----------
-        :return: Type['SpatialStochasticHillClimbing']
-        """
-        self.X_ = X
-        self.y_ = y
-
-        self.iter_ = int(0)
-        self.result_grid_ = []
-
-        # Set the seeds
-        np.random.seed(self.seed)
-        random.seed(self.seed)
-
-        self.prior_ = self.prior
-        if self.prior is not None:
-            if self.prior.shape != self.grid.reshape(-1).shape:
-                raise RuntimeError(
-                    f'The argument prior {self.prior.shape} must match '
-                    f'the number of cells of grid {self.grid.reshape(-1).shape}.')
-
-        self.solution_, self.mask_, self.score_ = self.run()
-
-        # Conclude the result grid (Calculate the Size and Height)
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
-        self.result_grid_[['Height', 'Width']] = self.result_grid_['Mask'].apply(
-            lambda mask: pd.Series(compute_subgrid_dimensions(mask))
-        )
-        columns = list(self.result_grid_.columns)
-        size_index = columns.index('Size')
-        new_order = columns[:size_index + 1] + ['Height', 'Width'] + columns[size_index + 1:-2]
-        self.result_grid_ = self.result_grid_[new_order]
-
-        return self
-
-    def transform(
-            self, X: numpy.ndarray, y: numpy.ndarray = None
-    ) -> numpy.ndarray:
-        """
-        Transforms the input with the mask obtained from
-        the solution of Spatial Stochastic Hill Climbing algorithm.
-
-        Parameters:
-        -----------
-        :param X: numpy.ndarray
-            Array-like with dimensions [samples, channel_height, channel_width, time]
-        :param y: numpy.ndarray, default = None
-            Array-like with dimensions [targets].
-
-        Return:
-        -----------
-        :return: numpy.ndarray
-            Returns a filtered array-like with dimensions
-            [samples, channel_height, channel_width, time]
-        """
-        sklearn_is_fitted(self)
-
-        return X[:, self.mask_, :]
-
-    def run(
-            self
-    ) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
+    def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
         Executes the Spatial Stochastic Hill Climbing algorithm.
 
@@ -245,66 +410,232 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         :return: Tuple[numpy.ndarray, numpy.ndarray, float, pandas.DataFrame]
             A tuples with the solution, mask, the evaluation scores and the optimization history.
         """
-        # Initialize and run the SSHC optimizer
-        sshc = SSHC(
-            func=self.objective_function,
-            channel_grid=self.grid,
-            epsilon=self.epsilon,
-            n_iter=self.n_iter,
-            tol=self.tol,
-            patience=self.patience,
-            prior=self.prior,
-            seed=self.seed,
-            verbose=self.verbose
-        )
-        score, mask = sshc.run()
+        if len(self.dimensions) > 2:
+            raise ValueError(
+                f"Only two dimensions are allowed. Got {len(self.dimensions)}."
+            )
 
-        solution = mask.reshape(-1).astype(float)
-        best_state = mask
-        best_score = score * 100
+        wait = 0
+        best_score = 0.0
+        best_state = None
+        eval_hist = {}
+        e = self.epsilon[0]
+        e_min = self.epsilon[1]
+        e_decay = (e - e_min) / self.n_iter
+
+        grid_dimensions = np.array(self._X.shape)[np.array(self.dimensions)]
+        grid = np.arange(1, np.prod(grid_dimensions) + 1).reshape(grid_dimensions)
+        init_pos = grid.flatten()
+        if self.prior:
+            prior_mask = np.where(self.prior > 0.5, False, True).reshape(grid.shape)
+            init_pos = grid[prior_mask].flatten()
+        starts = self._set_start(init_pos, self.n_iter)
+
+        # Run Search
+        progress_bar = tqdm(
+            range(self.n_iter),
+            desc=self.__class__.__name__,
+            postfix=f"{best_score:.6f}",
+            disable=not self.verbose,
+            leave=True,
+        )
+        for _ in progress_bar:
+            start = int(np.random.choice(starts, size=1, replace=False))
+            rse = RectangleSubgridExpansion(grid, start)
+
+            # Evaluate start position
+            # Evaluate each combination and store the results
+            candidate_directions = list(
+                map(lambda x: x.reshape((1, 2)), rse.incl_channels)
+            )
+            results = self._local_neighbourhood_search(
+                eval_hist, rse, candidate_directions
+            )
+
+            eval_hist[str(grid[rse.incl_channels[0, 0], rse.incl_channels[0, 1]])] = (
+                np.round(np.mean(results[0][1]), 8)
+            )
+
+            # Expansion process using stochastic hill-climbing
+            while len(rse.incl_channels) < rse.mask.size:
+                new_chan, score = self._step(eval_hist, rse, e)
+                rse.expand_subgrid(new_chan)
+
+                channel_ids = to_str(
+                    grid[rse.incl_channels[:, 0], rse.incl_channels[:, 1]].flatten()
+                )
+                eval_hist[channel_ids] = score
+                if score > best_score:
+                    best_score, best_state = score, copy(rse.mask)
+                    progress_bar.set_postfix(best_score=f"{best_score:.6f}")
+                    if abs(best_score - score) > self.tol:
+                        wait = 0
+            if wait > self.patience or best_score >= 1.0:
+                progress_bar.write(f"\nMaximum score reached")
+                break
+
+            wait += 1
+            e -= e_decay if e > e_min else 0
+
+        solution = best_state.reshape(-1).astype(float)
+        best_score *= 100
         return solution, best_state, best_score
 
-    def objective_function(
-            self, mask: Union[bool, numpy.ndarray], candidate_directions: List[numpy.ndarray],
-            eval_hist: Dict[str, float]
-    ) -> List[Tuple[numpy.ndarray, float]]:
+    def _step(
+        self, eval_hist: Dict[str, float], rse: RectangleSubgridExpansion, e: float
+    ) -> Tuple[numpy.ndarray, float]:
         """
-        Evaluates each candidate channel expansion and computes their scores.
+        Executes a single step in the hill-climbing process,
+        choosing between exploration and exploitation.
 
         Parameters:
         -----------
-        :param mask : numpy.ndarray
-            The current mask of included channels.
-        :param candidate_directions : List[np.ndarray]
-            The directions in which the subgrid could potentially expand.
+        :param eval_hist: Dict[str, float]
+            A probability to determine the stochastic-greedy strategy.
+        :param rse: RectangleSubgridExpansion
+            The current state of the subgrid expansion.
+        :param e: float
+            A probability to determine the stochastic-greedy strategy.
 
         Returns:
         --------
-        :return: List[Tuple[numpy.ndarray, float]]
-            A list of tuples with candidate channels and their evaluation scores.
+        :return Tuple[numpy.ndarray, str]
+            The chosen new channel to include and its evaluation score.
         """
-        # Evaluate each combination and store the results
-        results = []
-        for candidate_id in candidate_directions:
-            candidate_mask = copy(mask)
-            candidate_mask[candidate_id[:, 0], candidate_id[:, 1]] = True  # Temporarily include the candidate
+        candidate_directions = rse.determine_directions()
+        # Exploitation: Evaluate all candidates and choose the best
+        if random.uniform(0, 1) > e:
+            results = self._local_neighbourhood_search(
+                eval_hist, rse, candidate_directions
+            )
+            # results = self.objective(rse.mask, candidate_directions, self.eval_hist)
+            new_chan, score = max(results, key=lambda x: x[1])
+        # Exploration: Randomly choose a direction and evaluate
+        else:
+            random_choice = random.randint(0, len(candidate_directions) - 1)
+            candidate_directions = [candidate_directions[random_choice]]
+            [(new_chan, score)] = self._local_neighbourhood_search(
+                eval_hist, rse, candidate_directions
+            )
+        return new_chan, score
 
+    def _local_neighbourhood_search(self, eval_hist, rse, candidate_directions):
+        """
+        Executes a local neigbourhood search on the edges of the mask.
+
+        Parameters:
+        -----------
+        :param eval_hist: Dict[str, float]
+            A probability to determine the stochastic-greedy strategy.
+        :param rse: RectangleSubgridExpansion
+            The current state of the subgrid expansion.
+        :param candidate_directions: List[numpy.ndarray]
+            A list containing the coordinates of candidates for each
+            viable expansion direction (up, down, left, right).
+
+        Returns:
+        --------
+        :return List[Tuple[numpy.ndarray, float]
+            A list of tuples indicating the channel ids and their performance.
+        """
+        results = []
+        # mask = np.full(shape=self.channel_grid.shape, fill_value=False)
+        for candidate_id in candidate_directions:
+            candidate_mask = copy(rse.mask)
+            candidate_mask[candidate_id[:, 0], candidate_id[:, 1]] = (
+                True  # Temporarily include the candidate
+            )
             # Generate a key for eval_hist to check if this configuration was already evaluated
-            channel_ids = to_dict_keys(self.grid[candidate_mask].flatten())
+            channel_ids = to_str(rse.channel_grid[candidate_mask].flatten())
             if channel_ids in eval_hist:
                 results.append((candidate_id, eval_hist[channel_ids]))
                 continue
-
-            self.iter_ += 1
-
-            # If not previously evaluated, perform evaluation on the data
-            X_sub = self.X_[:, candidate_mask].reshape(self.X_.shape[0], -1)
-            scores = self.evaluate_candidates(X_sub)
-
-            score = scores.mean()
+            score = self._objective_function(candidate_mask)
             results.append((candidate_id, score))
-
-            self.save_statistics(candidate_mask.reshape(self.grid.shape), scores)
-
         return results
 
+    @staticmethod
+    def _set_start(
+        channels: numpy.ndarray,
+        num_samples: int,
+        bad_channels: Union[List[int], None] = None,
+    ) -> numpy.ndarray:
+        """
+        Uniformly samples start positions from the available channels,
+        excluding any specified bad channels.
+
+        Parameters:
+        -----------
+        :param channels: np.ndarray
+            An array of channels from which to sample the start positions.
+        :param num_samples: int
+            The number of samples to draw for start positions.
+        :param bad_channels: Union[List[int], None]
+            A list of channels to exclude from the start position sampling.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            An array of sampled start positions.
+        """
+        # Remove the bad channels to get an array of good channels
+        if bad_channels is not None:
+            channels = np.setdiff1d(channels, np.array(bad_channels))
+        return np.random.choice(channels, size=num_samples, replace=True)
+
+    def _handle_bounds(self) -> None:
+        """
+        Placeholder method for handling bounds.
+
+        Returns:
+        -------
+        :returns: None
+        """
+
+    def _handle_prior(self) -> None:
+        """
+        Placeholder method for handling prior.
+
+        Returns:
+        -------
+        :returns: None
+        """
+
+    def _prepare_result_grid(self) -> None:
+        """
+        Finalizes the result grid. For the Spatial Stochastic Hill Climbing, the height
+        and width of the included area is added.
+
+        Returns:
+        --------
+        returns: None
+        """
+
+        
+        if self.n_jobs > 1:
+            self.result_grid_ = pd.concat(
+                ray.get(self.result_grid_.get.remote()), axis=0, ignore_index=True
+            )
+        else:
+            self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
+
+        # Compute the height and width for each mask and assign them to the result grid
+        self.result_grid_[["Height", "Width"]] = self.result_grid_["Mask"].apply(
+            lambda mask: pd.Series(
+                compute_subgrid_dimensions(
+                    mask.reshape(
+                        tuple(np.array(self._X.shape)[np.array(self.dimensions)])
+                    )
+                )
+            )
+        )
+
+        # Reorder the columns to place 'Height' and 'Width' after 'Size'
+        columns = list(self.result_grid_.columns)
+        size_index = columns.index("Size")
+        new_order = (
+            columns[: size_index + 1]
+            + ["Height", "Width"]
+            + columns[size_index + 1 : -2]
+        )
+        self.result_grid_ = self.result_grid_[new_order]

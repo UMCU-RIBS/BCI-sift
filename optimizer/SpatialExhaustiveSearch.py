@@ -11,6 +11,7 @@ from functools import partial
 from typing import Tuple, Union, Dict, Any, Optional, List, Callable
 
 import numpy
+import ray
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import BaseCrossValidator
@@ -141,12 +142,14 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         self,
         # General and Decoder
         dimensions: Tuple[int, ...],
+        feature_space: str,
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
         cv: Union[BaseCrossValidator, int, float] = 10,
         groups: Optional[numpy.ndarray] = None,
         strategy: str = "joint",
+        #grid: numpy.ndarray = None,
         # Training Settings
         tol: Union[Tuple[int, ...], float] = 1e-5,
         patience: Union[Tuple[int, ...], int] = int(1e5),
@@ -161,6 +164,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
         super().__init__(
             dimensions,
+            feature_space,
             estimator,
             estimator_params,
             scoring,
@@ -177,41 +181,82 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             verbose,
         )
 
-    @staticmethod
-    def compute_objective_function(
-        mask: numpy.ndarray, objective_func: Callable, pool: multiprocessing.Pool = None
-    ):
+    #TODO: fix naming & documentation of this method
+    def _compute_objective(
+        self,
+        random_perturbations: numpy.ndarray,
+    ) -> numpy.ndarray:
         """
-        Evaluate particles using the objective function
+        Generate random masks and compute their objective function scores. This method
+        allows the RS algorithm to interface correctly with the objective function by
+        converting the input mask tensor into individuals and evaluating them.
 
-        This method evaluates each particle in the swarm according to the
-        objective function passed.
-
-        If a pool is passed, then the evaluation of the particles is done in
-        parallel using multiple processes.
+        If more than one cpu core is passed, then the evaluation of the particles is
+        done in parallel using multiple processes.
 
         Parameters
         ----------
-        :param swarm : Swarm
-            A Swarm instance
-        :param objective_func : Callable
-            Objective function to be evaluated
-        :param pool: multiprocessing.Pool, optional
-            The pool to be used for parallel particle evaluation
+        :param random_perturbations: numpy.ndarray
+            The random generated perturbations.
 
         Returns
         -------
-        :return: numpy.ndarray
-            Cost-matrix for the given swarm
+        numpy.ndarray
+            The performance-matrix for a collection of masks.
         """
-        if pool is None:
-            return objective_func(mask)
-        else:
-            results = pool.map(
-                partial(objective_func),
-                numpy.array_split(mask, pool._processes),
+        positions_split = numpy.array_split(
+            random_perturbations, random_perturbations.shape[0]
+        )
+
+        # fmt: off
+        # Use multiprocessing pool to compute scores in parallel
+        if self.n_jobs > 1:
+            return ray.get(
+                [self._objective_function_wrapper.remote(self, pos) for pos in positions_split]
             )
-            return numpy.concatenate(results)
+        # If no pool is provided, compute scores sequentially
+        else:
+            penalty_weight = 0 #TODO: have as parameter
+            return [self._objective_function(pos) - penalty_weight*numpy.sum(numpy.array(pos) > 0.5)/len(pos[0]) for pos in positions_split] #TODO: put somewhere better (talk to Dirk)
+        #[self._objective_function(pos) for pos in positions_split]
+        # fmt: on
+
+    #TODO: remove this method
+    # @staticmethod
+    # def compute_objective_function(
+    #     mask: numpy.ndarray, objective_func: Callable, pool: multiprocessing.Pool = None
+    # ):
+    #     """
+    #     Evaluate particles using the objective function
+
+    #     This method evaluates each particle in the swarm according to the
+    #     objective function passed.
+
+    #     If a pool is passed, then the evaluation of the particles is done in
+    #     parallel using multiple processes.
+
+    #     Parameters
+    #     ----------
+    #     :param swarm : Swarm
+    #         A Swarm instance
+    #     :param objective_func : Callable
+    #         Objective function to be evaluated
+    #     :param pool: multiprocessing.Pool, optional
+    #         The pool to be used for parallel particle evaluation
+
+    #     Returns
+    #     -------
+    #     :return: numpy.ndarray
+    #         Cost-matrix for the given swarm
+    #     """
+    #     if pool is None:
+    #         return objective_func(mask)
+    #     else:
+    #         results = pool.map(
+    #             partial(objective_func),
+    #             numpy.array_split(mask, pool._processes),
+    #         )
+    #         return numpy.concatenate(results)
 
     def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
@@ -224,7 +269,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         Tuple[numpy.ndarray, numpy.ndarray, float]
             The best solution, mask found and their score.
         """
-        if len(self.dimensions) > 2:
+        if len(self.dimensions) != 2:
             raise ValueError(
                 f"Only two dimensions are allowed. Got {len(self.dimensions)}."
             )
@@ -243,18 +288,19 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         subgrids = self._generate_subgrids(*grid.shape)
 
         total_iterations = len(subgrids)
-        chunk_size = total_iterations // self.n_jobs
+        chunk_size = max(total_iterations // self.n_jobs, self.n_jobs) #self.n_jobs*5 #
+        print(chunk_size)
         chunks = [
-            subgrids[i : i + chunk_size] for i in range(0, total_iterations, chunk_size)
+            subgrids[i : i + chunk_size] for i in range(0, total_iterations, chunk_size) #total_iterations
         ]
 
-        pool = None
-        if self.n_jobs > 1:
-            self.result_grid_ = multiprocessing.Manager().list()
-            pool = multiprocessing.Pool(self.n_jobs)
+        # pool = None
+        # if self.n_jobs > 1:
+        #     self.result_grid_ = multiprocessing.Manager().list()
+        #     pool = multiprocessing.Pool(self.n_jobs)
 
         progress_bar = tqdm(
-            range(chunk_size),
+            range(len(chunks)), #range(chunk_size)
             desc=self.__class__.__name__,
             postfix=f"{best_score:.6f}",
             disable=not self.verbose,
@@ -263,27 +309,53 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         for iteration in progress_bar:
             mask = np.zeros((chunk_size, *grid.shape), dtype=bool)
 
-            for i in range(chunk_size):
+            for i in range(len(chunks[iteration])):
                 start_row, start_col, end_row, end_col = chunks[iteration][i]
                 mask[i, start_row:end_row, start_col:end_col] = True
 
-            scores = self.compute_objective_function(
-                mask, self._objective_function, pool
+            scores = self._compute_objective(
+                mask
             )
 
-            # Calculate the score for the current subgrid and update if it's the best score
-            if (score := self._objective_function(mask)) > best_score:
-                best_score, best_state = score, mask
-                progress_bar.set_postfix(best_score=f"{best_score:.6f}")
-                if abs(best_score - score) > self.tol:
-                    wait = 0
-            if wait > self.patience or score >= 1.0:
-                progress_bar.write(f"\nMaximum score reached")
-                break
+            # Update logs and early stopping
             wait += 1
+            score = numpy.max(scores)
+            if best_score < score:
+                if score - best_score > self._tol:
+                    wait = 0
+                best_score = score
+                best_state = mask[scores == score]
+                best_state = best_state[numpy.random.choice(best_state.shape[0])]
+            progress_bar.set_postfix(best_score=f"{best_score:.6f}")
+            if wait > self._patience:
+                progress_bar.set_postfix(
+                    best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
+                )
+                break
+            elif score >= 1.0:
+                progress_bar.set_postfix(
+                    best_score=f"Maximum score reached: {best_score:.6f}"
+                )
+                break
+            elif self.callback is not None:
+                if self.callback(best_score, best_state, self.result_grid_):
+                    progress_bar.set_postfix(
+                        best_score=f"Stopped by callback: {best_score:.6f}"
+                    )
+                    break
+            # # Calculate the score for the current subgrid and update if it's the best score
+            # if (score := self._objective_function(mask)) > best_score:
+            #     best_score, best_state = score, mask
+            #     progress_bar.set_postfix(best_score=f"{best_score:.6f}")
+            #     if abs(best_score - score) > self.tol:
+            #         wait = 0
+            # if wait > self.patience or score >= 1.0:
+            #     progress_bar.write(f"\nMaximum score reached")
+            #     break
+            # wait += 1
 
         solution = best_state.reshape(-1).astype(float)
-        best_state = self._prepare_mask(best_state)
+        #best_state = self._prepare_mask(best_state)
         best_score *= 100
         return solution, best_state, best_score
 
@@ -344,9 +416,12 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         --------
         returns: None
         """
-
-        # Concatenate the result grid along the rows (axis=0) and reset the index
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
+        if self.n_jobs > 1:
+            self.result_grid_ = pd.concat(
+                ray.get(self.result_grid_.get.remote()), axis=0, ignore_index=True
+            )
+        else:
+            self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
 
         # Compute the height and width for each mask and assign them to the result grid
         self.result_grid_[["Height", "Width"]] = self.result_grid_["Mask"].apply(
@@ -368,3 +443,23 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             + columns[size_index + 1 : -2]
         )
         self.result_grid_ = self.result_grid_[new_order]
+
+
+    @ray.remote
+    def _objective_function_wrapper(self, mask: numpy.ndarray) -> float:
+        """
+        Wraps the objective function to adapt it for compatibility with ray's cpu
+        parallelization.
+
+        Parameters:
+        -----------
+        mask : numpy.ndarray
+            An individual mask representing potential solutions.
+
+        Returns:
+        --------
+        :return: numpy.ndarray
+            The mask performanc score.
+        """
+        penalty_weight = 0 #TODO: have as parameter
+        return self._objective_function(mask) - penalty_weight*numpy.sum(numpy.array(mask) > 0.5)/len(mask[0]) #TODO: put somewhere better (talk to Dirk)

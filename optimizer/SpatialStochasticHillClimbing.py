@@ -14,6 +14,7 @@ from typing import Tuple, List, Union, Dict, Any, Optional, Callable, Type
 import numpy
 import numpy as np
 import pandas as pd
+import ray
 from sklearn.model_selection import BaseCrossValidator
 from sklearn.pipeline import Pipeline
 from tqdm import tqdm
@@ -347,11 +348,13 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         self,
         # General and Decoder
         dimensions: Tuple[int, ...],
+        feature_space: str,
         estimator: Union[Any, Pipeline],
         estimator_params: Optional[Dict[str, any]] = None,
         scoring: str = "f1_weighted",
         cv: Union[BaseCrossValidator, int] = 10,
         groups: Optional[numpy.ndarray] = None,
+        strategy: str = "joint",
         # Spatial Stochastic Search Settings
         n_iter: int = 100,
         epsilon: Tuple[float, float] = (0.75, 0.25),
@@ -369,11 +372,13 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
         super().__init__(
             dimensions,
+            feature_space,
             estimator,
             estimator_params,
             scoring,
             cv,
             groups,
+            strategy,
             tol,
             patience,
             bounds,
@@ -603,8 +608,13 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         returns: None
         """
 
-        # Concatenate the result grid along the rows (axis=0) and reset the index
-        self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
+        
+        if self.n_jobs > 1:
+            self.result_grid_ = pd.concat(
+                ray.get(self.result_grid_.get.remote()), axis=0, ignore_index=True
+            )
+        else:
+            self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
 
         # Compute the height and width for each mask and assign them to the result grid
         self.result_grid_[["Height", "Width"]] = self.result_grid_["Mask"].apply(

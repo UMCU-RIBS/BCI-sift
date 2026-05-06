@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
 # BCI-FeaST
-# Copyright (c) 2024
+# Copyright (c) 2025
 #       Dirk Keller,
 #       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht

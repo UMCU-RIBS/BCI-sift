@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
 # HandDecoding
-# Copyright (c) 2023
+# Copyright (c) 2025
 #       Dirk Keller,
 #       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
@@ -233,7 +233,7 @@ def elimination_plot(
     plt.savefig(
         f"{output_path}/{identifier}_{target}_channel_elimination_plot.png",
         bbox_inches="tight",
-        dpi=100 + np.log(grid.size) * 200,
+        dpi=300,
     )
     plt.close()
 
@@ -545,6 +545,6 @@ def importance_plot(
     plt.savefig(
         f"{output_path}/{identifier}_channel_importance_{viz}_plot.png",
         bbox_inches="tight",
-        dpi=100 + np.log(grid.size) * 200,
+        dpi=300,
     )
     plt.close()

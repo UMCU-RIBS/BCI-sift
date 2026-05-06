@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
 # BCI-FeaST
-# Copyright (c) 2024
+# Copyright (c) 2025
 #       Dirk Keller,
 #       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
@@ -19,7 +19,6 @@ from sklearn.model_selection import BaseCrossValidator
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.utils._param_validation import Interval, RealNotInt
-# from sklearn.utils._metadata_requests import _RoutingNotSupportedMixin
 from tqdm import tqdm
 
 from optimizer.backend._trainer import cross_validate
@@ -79,7 +78,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         Proportion of features that should be reached through elimination
     :param step: Union[float, int], default = 1
         Number of features to be eliminated in each step of the algorithm
-    :param importance_getter: str, default = "named_steps.classifier.coef_" #TODO: change to auto see scikitlearn RFE
+    :param importance_getter: str, default = "auto"
         String that specifies an attribute name/path for extracting feature importance
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
@@ -180,8 +179,8 @@ class RecursiveFeatureElimination(BaseOptimizer):
         strategy: str = "conditional",
         # Recursive Feature Elimination Settings
         n_features_to_select: Union[int, float] = 1,
-        step: Union[str, float] = 1,  # TODO automatical step size
-        importance_getter: str = "named_steps.classifier.coef_",  # TODO Hardcoded mus be determined automatical as default
+        step: Union[str, float] = 1, 
+        importance_getter: str = "auto",  
         # Training Settings
         tol: Union[Tuple[int, ...], float] = 1e-5,
         patience: Union[Tuple[int, ...], int] = int(1e5),
@@ -270,12 +269,11 @@ class RecursiveFeatureElimination(BaseOptimizer):
         self._custom_store["fitted_estimators"] = result["estimator"]
         return result["test_score"], result["fit_time"], result["score_time"]
 
-    # TODO: ask Dirk how to implement this
+    
     def _handle_bounds(self):
         """Method to handle bounds for feature selection."""
         return self.bounds
 
-    # TODO: ask Dirk how to implement this
     def _handle_prior(self):
         """Initialize the feature mask with the prior if provided."""
         if self.prior is not None:
@@ -327,6 +325,23 @@ class RecursiveFeatureElimination(BaseOptimizer):
         else:
             step = int(self.step)
 
+        # re-shape input to have dimensions to be optimized last
+        dims_incl = [self._dims_incl] if isinstance(self._dims_incl, int) else self._dims_incl
+        new_order = [dim for dim in list(range(self._X.ndim)) if dim not in dims_incl] + dims_incl
+        self._X = numpy.transpose(self._X,new_order)
+        self._dims_incl = [new_order.index(dim) for dim in self._dims_incl] if isinstance(self._dims_incl, list) else self._X.ndim-1
+        if isinstance(self._dims_incl, list): #TODO: make this prettier?
+            self._slices = tuple(
+               numpy.newaxis if d not in self._dims_incl else slice(None)
+               for d in range(self._X.ndim)
+            )
+        elif isinstance(self._dims_incl, int):
+            self._slices = tuple(
+               numpy.newaxis if d != self._dims_incl else slice(None)
+               for d in range(self._X.ndim)
+            )
+
+        non_optimized_dims = [dim for i, dim in enumerate(self._X.shape[1::]) if i+1 not in (self._dims_incl if isinstance(self._dims_incl, list) else [self._dims_incl])]
         support = numpy.ones(shape=n_features, dtype=bool)
 
         # Run search
@@ -344,13 +359,13 @@ class RecursiveFeatureElimination(BaseOptimizer):
             fit_est = self._custom_store["fitted_estimators"]
 
             # Fetch and process coefficients
-            coefs = numpy.stack([getter(est) for est in fit_est]).reshape(
-                (len(fit_est), -1, n_features - self.iter_ * step)
-            )
-            ranks = numpy.argsort(
-                numpy.mean(coefs**2, axis=tuple(range(coefs.ndim - 1)))
-            )
-
+            original_shape = (*non_optimized_dims, sum(support))
+            coefs = numpy.stack([
+                getter(est).reshape(getter(est).shape[0], *original_shape, order='C')  # or 'F' to match flattening
+                for est in fit_est
+            ])
+            axes_to_reduce = tuple(range(coefs.ndim - 1))#tuple(i for i in range(coefs.ndim) if i != 2) 
+            ranks = numpy.argsort(numpy.mean(coefs**2, axis=axes_to_reduce))
             weights = numpy.zeros((n_features,), dtype=int)
             weights[support] = ranks.argsort()  # the larger the better
 
@@ -363,7 +378,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
             # Update logs and early stopping
             wait += 1
-            if best_score < score:
+            if best_score <= score:
                 if score - best_score > self._tol:
                     wait = 0
                 best_score = score
@@ -388,6 +403,20 @@ class RecursiveFeatureElimination(BaseOptimizer):
 
         best_solution = mask.reshape(-1).astype(float)
         best_score = best_score * 100
+        #change dimensions back for saving the mask
+        self._X = numpy.transpose(self._X,numpy.argsort(new_order))
+        self._dims_incl = dims_incl[0] if len(dims_incl) == 1 else dims_incl
+        if isinstance(self._dims_incl, list): #TODO: make this prettier?
+            self._slices = tuple(
+               numpy.newaxis if d not in self._dims_incl else slice(None)
+               for d in range(self._X.ndim)
+            )
+        elif isinstance(self._dims_incl, int):
+            self._slices = tuple(
+               numpy.newaxis if d != self._dims_incl else slice(None)
+               for d in range(self._X.ndim)
+            )
+
         return best_solution, best_state, best_score
 
     # def check_importance_getter(self) -> None:

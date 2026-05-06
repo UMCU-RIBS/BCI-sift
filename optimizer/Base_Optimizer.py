@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
-# BCI-FeaST
-# Copyright (c) 2024
+# BCI-sift
+# Copyright (c) 2025
 #       Dirk Keller,
 #       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
@@ -58,7 +58,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
     Parameters:
     -----------
     :param dimensions: Tuple[int, ...]
-        A tuple of dimensions indies tc apply the feature selection onto. Any
+        A tuple of dimensions indices to apply the feature selection onto. Any
         combination of dimensions can be specified, except for dimension 'zero', which
         represents the samples.
     :param feature_space: str
@@ -326,7 +326,6 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         self._estimator = clone(self.estimator)
         if self.estimator_params:
             self._set_estimator_params()
-        # self._check_estimator_data_requirements()
 
         self.iter_ = 0
         self.result_grid_ = []
@@ -383,7 +382,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             self._tol = self.tol[idx] if not isinstance(self.tol, float) else self.tol
             self._patience = (self.patience[idx] if not isinstance(self.patience, int) else self.patience)
             self._bounds = self._handle_bounds()
-            self._prior = self._handle_prior()           # TODO need an array-like of priors otherwise an error will arise
+            self._prior = self._handle_prior()
             # fmt: on
 
             solution, state, score = self._run()
@@ -430,12 +429,12 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
 
         if (
             feature_space == "tabular"
-        ):  # TODO try to reuse a transform function. mask must be independt of the samples
+        ):  
             return X[:, self.mask_[0]]
         elif feature_space == "tensor":
             return X * numpy.tile(
                 self.mask_[0], (X.shape[0], *(1 for _ in X.shape[1:]))
-            )  # TODO try to reuse a transform function. mask must be independt of the samples
+            )  
         else:
             raise ValueError(
                 f"The argument feature_space must be 'tabular' or 'tensor'."
@@ -474,11 +473,10 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         if numpy.array(mask).dtype != bool:
             mask = numpy.array(mask) > 0.5
 
-        # full_mask = self._prepare_tensor_mask(mask)
         selected_features = self._feature_transform(
             mask
-        )  # self._X * full_mask.astype(int)
-
+        )  
+        # Evaluate the selected features using cross-validation or train-test split
         scores, train_times, infer_times = self._evaluate_candidates(selected_features)
         score, train_time, infer_time = (
             scores.mean(),
@@ -542,7 +540,7 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             cv=self.cv,
             return_estimator=True,
             groups=self.groups,
-            n_jobs=self.n_jobs,  # self.n_jobs,
+            n_jobs=self.n_jobs,  
         )
         return (result["test_score"], result["fit_time"], result["score_time"])
 
@@ -736,103 +734,9 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
         else:
             self._estimator.set_params(**self.estimator_params)
 
-    # def _allocate_cpu_resources(
-    #         self,
-    #         cv: int,
-    #         n: int
-    # ) -> Tuple[int, int]:
-    #     """
-    #     Choose the best (ea_cores, cv_cores) pair.
-    #
-    #     Parameters:
-    #     -----------
-    #     :param cv: int
-    #         Number of cross-validation folds.
-    #     :param n: int
-    #         Number of generations in the evolutionary algorithm.
-    #
-    #     Raise:
-    #     ______
-    #     :raise ValueError:
-    #         Unable to allocate CPU resources with the specified cross-validation folds,
-    #         number of iterations, and the available free cores.
-    #
-    #     Returns:
-    #     --------
-    #     returns: Tuple[int, int]
-    #         The best combination of cores (algo, cv) allocated to the algorithm
-    #         and the cross-validation satisfying the constraints.
-    #     """
-    #     pairs = [
-    #         (algo_cores, self.n_jobs // algo_cores)
-    #         for algo_cores in range(1, self.n_jobs + 1)
-    #         if self.n_jobs % algo_cores == 0
-    #     ]
-    #     valid_pairs = [
-    #         (algo_cores, cv_cores)
-    #         for algo_cores, cv_cores in pairs
-    #         if algo_cores <= n and cv_cores <= cv and cv % cv_cores == 0
-    #     ]
-    #
-    #     if not valid_pairs:
-    #         raise ValueError(
-    #             f"CPU resource allocation failed with constraints: n_jobs={self.n_jobs}, cv={cv}, n={n}."
-    #         )
-    #
-    #     return max(valid_pairs, key=lambda x: x[1])
-
-    # def _check_estimator_data_requirements(
-    #         self
-    # ) -> None:
-    #     """
-    #     Performs a check on whether the passed estimator expects 2-dimensional data
-    #     representation. Automatically adjusts the estimator to ensure compatibility.
-    #
-    #     Raises:
-    #     -------
-    #     :raise ValueError:
-    #         If the estimator raises a `ValueError` related to dimensionality that cannot
-    #         be resolved by automatically inserting a :code: `FlattenTransformer` and
-    #         :code: `SafeVarianceThreshold` into the pipeline, the ValueError is passed
-    #         to the User.
-    #
-    #     Returns:
-    #     --------
-    #     :returns: None
-    #     """
-    #     try:
-    #         self._validate_data(self._X)
-    #     except ValueError as e:
-    #         cases = [
-    #             "2D",
-    #             "dim",
-    #             "dims",
-    #             "dimensions",
-    #             "dimension",
-    #             "dimensional",
-    #             "input data",
-    #             "input",
-    #             "data",
-    #         ]
-    #         if any(term in str(e).lower() for term in cases):
-    #             try:
-    #                 dim_comp = Pipeline(
-    #                     [
-    #                         ("flatten", FlattenTransformer()),
-    #                         ("clean", SafeVarianceThreshold(threshold=0.0)),
-    #                     ]
-    #                 )
-    #                 self._validate_data(dim_comp.fit_transform(self._X), self._y)
-    #                 warnings.warn(
-    #                     f"Estimator adjusted for ND data compatibility.", UserWarning
-    #                 )
-    #                 self._estimator = Pipeline(dim_comp.steps + self._estimator.steps)
-    #             except e as e:
-    #                 raise e
-
     def _update_n_iter(self, n_iter: int) -> int:
         """
-        Updates n_iter (if present in the subclass)
+        Updates n_iter (if present in the subclass), which is the number of maximal iterations to force convergence.
 
         Parameter:
         ----------
@@ -863,20 +767,3 @@ class BaseOptimizer(ABC, MetaEstimatorMixin, TransformerMixin, BaseEstimator):
             )
         else:
             self.result_grid_ = pd.concat(self.result_grid_, axis=0, ignore_index=True)
-
-
-# Apply the sigmoid function to the mask
-# mask = 1 / (1 + np.exp(-np.array(mask)))
-#
-# # Flatten the mask if it has more than 1 dimension
-# if len(mask.shape) > 1:
-#     mask = mask.ravel()
-#
-# # Reshape the mask to align with the selected dimensions
-# reshaped_mask = mask.reshape(self.dim_size_)[tuple(self.slices_)]
-#
-# # Broadcast the mask of the considered dimensions to the full mask matching the data tensor
-# full_mask = np.broadcast_to(reshaped_mask, self.X_.shape)
-# mm = MinMaxScaler(feature_range=(self.bounds_[0], self.bounds_[1]))
-# X = self.X_.reshape(self.X_.shape[0], -1)
-# selected_features = mm.fit_transform(X) * full_mask.reshape(self.X_.shape[0], -1)

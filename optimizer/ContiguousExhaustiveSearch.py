@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
 # BCI-FeaST
-# Copyright (c) 2024
+# Copyright (c) 2025
 #       Dirk Keller,
 #       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
@@ -22,10 +22,10 @@ from .Base_Optimizer import BaseOptimizer
 from .backend._backend import compute_subgrid_dimensions
 
 
-class SpatialExhaustiveSearch(BaseOptimizer):
+class ContiguousExhaustiveSearch(BaseOptimizer):
     """
-    Implements a spatially constrained exhaustive search for finding
-    global best channel combinations within a grid based on a given metric.
+    Implements a contiguous constrained exhaustive search based on a given metric, 
+    for example for finding the global best channel combinations within a grid .
 
     Parameters:
     -----------
@@ -78,12 +78,12 @@ class SpatialExhaustiveSearch(BaseOptimizer):
     Methods:
     --------
     - fit:
-        Fit the model to the data, search through the spatial
+        Fit the model to the data, search through the contiguous
         constrained channel combinations.
     - transform:
         Apply the mask obtained from the search to transform the data.
     - run:
-        Execute the spatial exhaustive search.
+        Execute the contiguous exhaustive search.
     - evaluate_candidates:
         Evaluates the selected features using cross-validation or train-test split.
     - objective_function:
@@ -125,7 +125,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
     # >>> grid = np.arange(1, 33).reshape(X.shape[1:3])
     # >>> estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
 
-    # >>> shc = SpatialExhaustiveSearch(grid, estimator, verbose=True)
+    # >>> shc = ContiguousExhaustiveSearch(grid, estimator, verbose=True)
     # >>> shc.fit(X, y)
     # >>> print(shc.mask_)
     array([[False  True False False], [False False False False], [ True  True False False], [False False False  True],
@@ -149,7 +149,6 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         cv: Union[BaseCrossValidator, int, float] = 10,
         groups: Optional[numpy.ndarray] = None,
         strategy: str = "joint",
-        #grid: numpy.ndarray = None,
         # Training Settings
         tol: Union[Tuple[int, ...], float] = 1e-5,
         patience: Union[Tuple[int, ...], int] = int(1e5),
@@ -184,11 +183,11 @@ class SpatialExhaustiveSearch(BaseOptimizer):
     #TODO: fix naming & documentation of this method
     def _compute_objective(
         self,
-        random_perturbations: numpy.ndarray,
+        masks: numpy.ndarray,
     ) -> numpy.ndarray:
         """
-        Generate random masks and compute their objective function scores. This method
-        allows the RS algorithm to interface correctly with the objective function by
+        Computes their objective function scores of a set of masks. This method
+        allows the exhaustive search algorithm to interface correctly with the objective function by
         converting the input mask tensor into individuals and evaluating them.
 
         If more than one cpu core is passed, then the evaluation of the particles is
@@ -196,8 +195,8 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
         Parameters
         ----------
-        :param random_perturbations: numpy.ndarray
-            The random generated perturbations.
+        :param masks: numpy.ndarray
+            The masks for which to compute the objective function scores.
 
         Returns
         -------
@@ -205,58 +204,19 @@ class SpatialExhaustiveSearch(BaseOptimizer):
             The performance-matrix for a collection of masks.
         """
         positions_split = numpy.array_split(
-            random_perturbations, random_perturbations.shape[0]
+            masks, masks.shape[0]
         )
 
         # fmt: off
-        # Use multiprocessing pool to compute scores in parallel
+        # Use multiprocessing to compute scores in parallel
         if self.n_jobs > 1:
             return ray.get(
                 [self._objective_function_wrapper.remote(self, pos) for pos in positions_split]
             )
-        # If no pool is provided, compute scores sequentially
+        # Alternatively, compute scores sequentially
         else:
-            penalty_weight = 0 #TODO: have as parameter
-            return [self._objective_function(pos) - penalty_weight*numpy.sum(numpy.array(pos) > 0.5)/len(pos[0]) for pos in positions_split] #TODO: put somewhere better (talk to Dirk)
-        #[self._objective_function(pos) for pos in positions_split]
+            return [self._objective_function(pos) for pos in positions_split]
         # fmt: on
-
-    #TODO: remove this method
-    # @staticmethod
-    # def compute_objective_function(
-    #     mask: numpy.ndarray, objective_func: Callable, pool: multiprocessing.Pool = None
-    # ):
-    #     """
-    #     Evaluate particles using the objective function
-
-    #     This method evaluates each particle in the swarm according to the
-    #     objective function passed.
-
-    #     If a pool is passed, then the evaluation of the particles is done in
-    #     parallel using multiple processes.
-
-    #     Parameters
-    #     ----------
-    #     :param swarm : Swarm
-    #         A Swarm instance
-    #     :param objective_func : Callable
-    #         Objective function to be evaluated
-    #     :param pool: multiprocessing.Pool, optional
-    #         The pool to be used for parallel particle evaluation
-
-    #     Returns
-    #     -------
-    #     :return: numpy.ndarray
-    #         Cost-matrix for the given swarm
-    #     """
-    #     if pool is None:
-    #         return objective_func(mask)
-    #     else:
-    #         results = pool.map(
-    #             partial(objective_func),
-    #             numpy.array_split(mask, pool._processes),
-    #         )
-    #         return numpy.concatenate(results)
 
     def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
@@ -269,13 +229,13 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         Tuple[numpy.ndarray, numpy.ndarray, float]
             The best solution, mask found and their score.
         """
-        if len(self.dimensions) != 2:
+        if len(self.dimensions) > 2:
             raise ValueError(
-                f"Only two dimensions are allowed. Got {len(self.dimensions)}."
+                f"Only one or two dimensions are allowed. Got {len(self.dimensions)}."
             )
         if self.strategy == "conditional":
             raise ValueError(
-                f"Spatial exhaustive Search requires access to all dimensions at the"
+                f"Contiguous Exhaustive Search requires access to all dimensions at the"
                 f" same time, hence only joint is allowed. Got {len(self.strategy)}."
             )
 
@@ -285,20 +245,20 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
         # Main loop over the number of starting positions
         grid = np.arange(1, np.prod(self._dim_size) + 1).reshape(self._dim_size)
-        subgrids = self._generate_subgrids(*grid.shape)
+        if grid.ndim==1:
+            grid_shape = (grid.shape[0],1)
+            subgrids = self._generate_subgrids(*grid_shape) #add empty dimension for compatibility
+        else:
+            grid_shape = grid.shape
+            subgrids = self._generate_subgrids(*grid_shape)
 
         total_iterations = len(subgrids)
-        chunk_size = max(total_iterations // self.n_jobs, self.n_jobs) #self.n_jobs*5 #
+        chunk_size = max(total_iterations // self.n_jobs, self.n_jobs) # Ensure at least n_jobs iterations per chunk
         print(chunk_size)
         chunks = [
             subgrids[i : i + chunk_size] for i in range(0, total_iterations, chunk_size) #total_iterations
         ]
-
-        # pool = None
-        # if self.n_jobs > 1:
-        #     self.result_grid_ = multiprocessing.Manager().list()
-        #     pool = multiprocessing.Pool(self.n_jobs)
-
+        
         progress_bar = tqdm(
             range(len(chunks)), #range(chunk_size)
             desc=self.__class__.__name__,
@@ -343,19 +303,8 @@ class SpatialExhaustiveSearch(BaseOptimizer):
                         best_score=f"Stopped by callback: {best_score:.6f}"
                     )
                     break
-            # # Calculate the score for the current subgrid and update if it's the best score
-            # if (score := self._objective_function(mask)) > best_score:
-            #     best_score, best_state = score, mask
-            #     progress_bar.set_postfix(best_score=f"{best_score:.6f}")
-            #     if abs(best_score - score) > self.tol:
-            #         wait = 0
-            # if wait > self.patience or score >= 1.0:
-            #     progress_bar.write(f"\nMaximum score reached")
-            #     break
-            # wait += 1
 
         solution = best_state.reshape(-1).astype(float)
-        #best_state = self._prepare_mask(best_state)
         best_score *= 100
         return solution, best_state, best_score
 
@@ -409,7 +358,7 @@ class SpatialExhaustiveSearch(BaseOptimizer):
 
     def _prepare_result_grid(self) -> None:
         """
-        Finalizes the result grid. For the Spatial Exhaustive Search, the height
+        Finalizes the result grid. For the Contiguous Exhaustive Search, the height
         and width of the included area is added.
 
         Returns:
@@ -461,5 +410,4 @@ class SpatialExhaustiveSearch(BaseOptimizer):
         :return: numpy.ndarray
             The mask performanc score.
         """
-        penalty_weight = 0 #TODO: have as parameter
-        return self._objective_function(mask) - penalty_weight*numpy.sum(numpy.array(mask) > 0.5)/len(mask[0]) #TODO: put somewhere better (talk to Dirk)
+        return self._objective_function(mask)

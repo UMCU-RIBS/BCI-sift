@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
 # BCI-FeaST
-# Copyright (c) 2024
+# Copyright (c) 2025
 #       Dirk Keller,
 #       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
@@ -570,4 +570,3 @@ class ParticleSwarmOptimization(BaseOptimizer):
             The particle performance score.
         """
         return self._objective_function(particle)
-        # numpy.array([-self._objective_function(x[i]) for i in range(x.shape[0])])

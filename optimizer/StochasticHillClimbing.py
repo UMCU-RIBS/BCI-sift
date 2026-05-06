@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
 # BCI-FeaST
-# Copyright (c) 2024
+# Copyright (c) 2025
 #       Dirk Keller,
 #       Elena Offenberg,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
@@ -59,7 +59,7 @@ class RectangleSubgridExpansion:
     def __init__(self, channel_grid: numpy.ndarray, start_pos: int) -> None:
         self.channel_grid = channel_grid
         self.mask, self.incl_channels = self.generate_boolean_mask(
-            channel_grid, start_pos
+            self.channel_grid, start_pos
         )
         self.subgrid_corners = self.get_subgrid_corners(self.mask)
 
@@ -102,6 +102,7 @@ class RectangleSubgridExpansion:
         :return: numpy.ndarray
             An array of coordinates for the corners of the subgrid.
         """
+
         # Get the coordinates of True values in subgrid
         coordinates = np.argwhere(subgrid == True)
 
@@ -238,10 +239,11 @@ class RectangleSubgridExpansion:
         self.incl_channels = np.vstack([self.incl_channels, new_chan])
 
 
-class SpatialStochasticHillClimbing(BaseOptimizer):
+class StochasticHillClimbing(BaseOptimizer):
     """
     Implements a stochastic hill climbing algorithm optimized for finding
-    the best channel combinations within a grid based on a given metric.
+    the best contiguous feature selection based on a given metric, for 
+    example the best channel combinations within a grid.
     This optimization technique incorporates exploration-exploitation
     balance, effectively searching through the channel configuration space.
 
@@ -283,7 +285,11 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         Explicitly initialize the optimizer state.
         If set to None if the to be optimized features are
         initialized randomly within the bounds.
-    :param callback: Optional[Union[Callable, Type]], default = None, #TODO adjust and add design
+    :param callback: Callable, optional
+        A callback function of the structure :code: `callback(x, f, context)`, which
+        will be called at each iteration. :code: `x` and :code: `f` are the solution and
+        function value, and :code: `context` contains the diagnostics of the current
+        iteration.
     :param n_jobs: int, default = 1
         The number of parallel jobs to run during cross-validation.
     :param random_state: Optional[int], default = None
@@ -300,7 +306,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
     - transform:
         Apply the mask obtained from the optimization to transform the data.
     - run:
-        Execute the spatial stochastic hill climbing optimization process.
+        Execute the stochastic hill climbing optimization process.
     - evaluate_candidates:
         Evaluates the selected features using cross-validation or train-test split.
     - objective_function:
@@ -358,7 +364,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         cv: Union[BaseCrossValidator, int] = 10,
         groups: Optional[numpy.ndarray] = None,
         strategy: str = "joint",
-        # Spatial Stochastic Search Settings
+        # Stochastic Search Settings
         n_iter: int = 100,
         epsilon: Tuple[float, float] = (0.75, 0.25),
         # Training Settings
@@ -366,7 +372,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         patience: int = int(1e5),
         bounds: Tuple[float, float] = (0.0, 1.0),
         prior: Optional[numpy.ndarray] = None,
-        callback: Optional[Union[Callable, Type]] = None,
+        callback: Optional[Callable] = None,
         # Misc
         n_jobs: int = 1,
         random_state: Optional[int] = None,
@@ -392,18 +398,18 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
             verbose,
         )
 
-        # Spatial Stochastic Search Settings
+        # Stochastic Search Settings
         self.n_iter = n_iter
         self.epsilon = epsilon
 
     def _run(self) -> Tuple[numpy.ndarray, numpy.ndarray, float]:
         """
-        Executes the Spatial Stochastic Hill Climbing algorithm.
+        Executes the Stochastic Hill Climbing algorithm.
 
         Parameters:
         --------
         :return: Tuple[np.ndarray, float]
-            The best channel configuration and its score.
+            The best contiguous feature configuration and its score.
 
         Returns:
         --------
@@ -412,7 +418,7 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
         """
         if len(self.dimensions) > 2:
             raise ValueError(
-                f"Only two dimensions are allowed. Got {len(self.dimensions)}."
+                f"Only one or two dimensions are allowed. Got {len(self.dimensions)}."
             )
 
         wait = 0
@@ -425,6 +431,8 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
         grid_dimensions = np.array(self._X.shape)[np.array(self.dimensions)]
         grid = np.arange(1, np.prod(grid_dimensions) + 1).reshape(grid_dimensions)
+        if len(grid.shape) < 2:
+            grid = grid[:,None] #if subgrid is 1D, add empty dimension
         init_pos = grid.flatten()
         if self.prior:
             prior_mask = np.where(self.prior > 0.5, False, True).reshape(grid.shape)
@@ -470,9 +478,23 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
                     progress_bar.set_postfix(best_score=f"{best_score:.6f}")
                     if abs(best_score - score) > self.tol:
                         wait = 0
-            if wait > self.patience or best_score >= 1.0:
-                progress_bar.write(f"\nMaximum score reached")
+                
+            if wait > self._patience:
+                progress_bar.set_postfix(
+                    best_score=f"Early Stopping Criteria reached: {best_score:.6f}"
+                )
                 break
+            elif score >= 1.0:
+                progress_bar.set_postfix(
+                    best_score=f"Maximum score reached: {best_score:.6f}"
+                )
+                break
+            elif self.callback is not None:
+                if self.callback(best_score, best_state, self.result_grid_):
+                    progress_bar.set_postfix(
+                        best_score=f"Stopped by callback: {best_score:.6f}"
+                    )
+                    break
 
             wait += 1
             e -= e_decay if e > e_min else 0
@@ -508,7 +530,6 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
             results = self._local_neighbourhood_search(
                 eval_hist, rse, candidate_directions
             )
-            # results = self.objective(rse.mask, candidate_directions, self.eval_hist)
             new_chan, score = max(results, key=lambda x: x[1])
         # Exploration: Randomly choose a direction and evaluate
         else:
@@ -539,7 +560,6 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
             A list of tuples indicating the channel ids and their performance.
         """
         results = []
-        # mask = np.full(shape=self.channel_grid.shape, fill_value=False)
         for candidate_id in candidate_directions:
             candidate_mask = copy(rse.mask)
             candidate_mask[candidate_id[:, 0], candidate_id[:, 1]] = (
@@ -603,14 +623,13 @@ class SpatialStochasticHillClimbing(BaseOptimizer):
 
     def _prepare_result_grid(self) -> None:
         """
-        Finalizes the result grid. For the Spatial Stochastic Hill Climbing, the height
+        Finalizes the result grid. For the Stochastic Hill Climbing, the height
         and width of the included area is added.
 
         Returns:
         --------
         returns: None
         """
-
         
         if self.n_jobs > 1:
             self.result_grid_ = pd.concat(

@@ -5,5 +5,5 @@ from .ParticleSwarmOptimization import ParticleSwarmOptimization
 from .RandomSearch import RandomSearch
 from .RecursiveFeatureElimination import RecursiveFeatureElimination
 from .SimulatedAnnealing import SimulatedAnnealing
-from .SpatialExhaustiveSearch import SpatialExhaustiveSearch
-from .SpatialStochasticHillClimbing import SpatialStochasticHillClimbing
+from .ContiguousExhaustiveSearch import ContiguousExhaustiveSearch
+from .StochasticHillClimbing import StochasticHillClimbing

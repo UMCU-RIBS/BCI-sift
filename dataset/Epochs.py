@@ -1,10 +1,11 @@
-'''
-
-What is changed:
-    - changed sec2ind from local to general (July 20, 2023)
-    - added possibility of unequal epochs: epochs.data_ is a list (July 20, 2023)
-    - added wrapping around the array if tmin or tmax indices are out of range: use np.take (July 25, 2023)
-'''
+# -------------------------------------------------------------
+# BCI-sift
+# Copyright (c) 2025
+#       Dirk Keller,
+#       Elena Offenberg,
+#       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
+# Licensed under the MIT License [see LICENSE for detail]
+# -------------------------------------------------------------
 import numpy as np
 from .Dataset import Dataset
 from .Events import Events
@@ -14,6 +15,32 @@ import warnings
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
 class Epochs:
+    """
+    Epochs class to create epochs from a given dataset and events. The class also has a method to convert the 
+    data into an array format that can be used for training machine learning models.
+    Parameters:
+    -----------
+    :param raw: Dataset
+        The raw dataset to create epochs from.
+    :param events: Events
+        The behavioral events to create epochs from.
+    :param tmin: float
+        Onset in time to start each epoch relative to each event's starting time point.
+    :param tmax: float or str
+        Offset in time to end each epoch relative to each event's starting time point. If tmax is a string, it can be either 
+        'maxlen' or 'unequal'. If tmax is 'maxlen', the length of each epoch is determined by the longest event in the dataset. 
+        If tmax is 'unequal', the length of each epoch is determined by the duration of each event in the dataset, which needs 
+        to be provided in the events dataframe as 'xmax'.
+
+    Methods:
+    --------
+    - data2array: Convert the data into an array format that can be used for training machine learning models. The data is stored 
+    in a dictionary with keys corresponding to the feature names.
+
+    Returns:
+    --------
+    :return: None
+    """
     def __init__(self, raw: Dataset, events: Events, tmin: float, tmax: object) -> None:
 
         self.data_ = OrderedDict({k:[] for k in raw.data.keys()})
@@ -23,7 +50,6 @@ class Epochs:
         if type(tmax) is str:
             if tmax == 'maxlen':
                 tmax = events.dataframe['duration'].max()
-                #offsets = events.dataframe['xmin'] + tmax
                 fixed_duration = tmax - tmin
             elif tmax == 'unequal':
                 assert 'xmax' in events.dataframe, 'If tmax is uniqual, xmax needs to be provided per event'
@@ -33,14 +59,12 @@ class Epochs:
                 raise NotImplementedError
         elif type(tmax) == int or type(tmax) == float:
             tmax = float(tmax)
-            #offsets = events.dataframe['xman'] + tmax
             fixed_duration = tmax - tmin
         else:
             raise NotImplementedError
 
         self.fixed_duration = fixed_duration
 
-        #sec2ind = lambda s: int(round(s * raw.sampling_rate))
         sr = raw.sampling_rate
         for k in self.data_.keys():
             if fixed_duration is not None:
@@ -50,7 +74,6 @@ class Epochs:
                     self.data_[k].append(raw.data[k].take(range(sec2ind(ons, sr),
                                                                 sec2ind(ons, sr) + sec2ind(fixed_duration, sr)),
                                                           axis=0, mode='wrap'))
-                    # self.data_[k].append(raw.data[k][max(sec2ind(ons, sr), 0):sec2ind(ons, sr) + sec2ind(fixed_duration, sr)])
                 self.data_[k] = np.array((self.data_[k]))
             else:
                 for ons, off in zip(self.onsets, self.offsets):
@@ -67,10 +90,6 @@ class Epochs:
 
         x = np.array(x)
         xx = x.transpose((1, 2, 0, 3)) # epochs x timepoints x feature sets x channels
-        # xxx = xx.reshape((xx.shape[0], xx.shape[1], -1)) # stack channels and feature sets: Lennart has default order C
-        # xxxx = xxx.reshape((xx.shape[0], -1), order='F') # stack over timestamps: Lennart has order F
-
-        #self.data =  xxxx
         self.data = xx
         self.feature_names = names
 

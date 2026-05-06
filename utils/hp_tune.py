@@ -1,6 +1,6 @@
 # -------------------------------------------------------------
 # HandDecoding
-# Copyright (c) 2023
+# Copyright (c) 2025
 #       Dirk Keller,
 #       Nick Ramsey's Lab, University Medical Center Utrecht, University Utrecht
 # Licensed under the MIT License [see LICENSE for detail]

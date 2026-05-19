@@ -112,7 +112,7 @@ BCI-sift/
     └── hp_tune.png
 ```
 
-## #. Citation
+## E. Citation
 
 If you use this repository, please cite the associated manuscript and the software repository.
 

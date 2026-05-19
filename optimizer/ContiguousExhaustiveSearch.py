@@ -180,13 +180,12 @@ class ContiguousExhaustiveSearch(BaseOptimizer):
             verbose,
         )
 
-    #TODO: fix naming & documentation of this method
     def _compute_objective(
         self,
         masks: numpy.ndarray,
     ) -> numpy.ndarray:
         """
-        Computes their objective function scores of a set of masks. This method
+        Computes the objective function scores of a set of masks. This method
         allows the exhaustive search algorithm to interface correctly with the objective function by
         converting the input mask tensor into individuals and evaluating them.
 

@@ -330,7 +330,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         new_order = [dim for dim in list(range(self._X.ndim)) if dim not in dims_incl] + dims_incl
         self._X = numpy.transpose(self._X,new_order)
         self._dims_incl = [new_order.index(dim) for dim in self._dims_incl] if isinstance(self._dims_incl, list) else self._X.ndim-1
-        if isinstance(self._dims_incl, list): #TODO: make this prettier?
+        if isinstance(self._dims_incl, list): 
             self._slices = tuple(
                numpy.newaxis if d not in self._dims_incl else slice(None)
                for d in range(self._X.ndim)
@@ -406,7 +406,7 @@ class RecursiveFeatureElimination(BaseOptimizer):
         #change dimensions back for saving the mask
         self._X = numpy.transpose(self._X,numpy.argsort(new_order))
         self._dims_incl = dims_incl[0] if len(dims_incl) == 1 else dims_incl
-        if isinstance(self._dims_incl, list): #TODO: make this prettier?
+        if isinstance(self._dims_incl, list):
             self._slices = tuple(
                numpy.newaxis if d not in self._dims_incl else slice(None)
                for d in range(self._X.ndim)

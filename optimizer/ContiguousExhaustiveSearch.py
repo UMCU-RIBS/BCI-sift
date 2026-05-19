@@ -114,23 +114,23 @@ class ContiguousExhaustiveSearch(BaseOptimizer):
     The following example shows how to retrieve a feature mask for
     a synthetic data set.
 
-    # >>> import numpy as np
-    # >>> from sklearn.svm import SVC
-    # >>> from sklearn.pipeline import Pipeline
-    # >>> from sklearn.preprocessing import MinMaxScaler
-    # >>> from sklearn.datasets import make_classification
-    # >>> from FingersVsGestures.src.channel_elimination import StochasticHillClimbing # TODO adjust
-    # >>> X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
-    # >>> X = X.reshape((100, 8, 4, 100))
-    # >>> grid = np.arange(1, 33).reshape(X.shape[1:3])
-    # >>> estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
+    import numpy as np
+    from sklearn.svm import SVC
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import MinMaxScaler
+    from sklearn.datasets import make_classification
+    from BCI-sift.src.channel_elimination import ContiguousExhaustiveSearch
+    X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
+    X = X.reshape((100, 8, 4, 100))
+    grid = np.arange(1, 33).reshape(X.shape[1:3])
+    estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
 
-    # >>> shc = ContiguousExhaustiveSearch(grid, estimator, verbose=True)
-    # >>> shc.fit(X, y)
-    # >>> print(shc.mask_)
+    ces = ContiguousExhaustiveSearch(dimensions=(1,2), feature_space = "tabular", estimator=estimator, verbose=True)
+    ces.fit(X, y)
+    print(ces.mask_)
     array([[False  True False False], [False False False False], [ True  True False False], [False False False  True],
            [False False False False], [False False False False], [False False  True False], [False False False False]])
-    # >>> print(shc.score_)
+    print(ces.score_)
      26.966666666666672
 
     Returns:
@@ -238,7 +238,7 @@ class ContiguousExhaustiveSearch(BaseOptimizer):
                 f"Contiguous Exhaustive Search requires access to all dimensions at the"
                 f" same time, hence only joint is allowed. Got {len(self.strategy)}."
             )
-
+        
         wait = 0
         best_score = 0.0
         best_state = None
@@ -253,7 +253,11 @@ class ContiguousExhaustiveSearch(BaseOptimizer):
             subgrids = self._generate_subgrids(*grid_shape)
 
         total_iterations = len(subgrids)
-        chunk_size = max(total_iterations // self.n_jobs, self.n_jobs) # Ensure at least n_jobs iterations per chunk
+        if self.n_jobs == -1:
+            n_jobs = multiprocessing.cpu_count()
+        else:
+            n_jobs = self.n_jobs
+        chunk_size = max(total_iterations // n_jobs, n_jobs) # Ensure at least n_jobs iterations per chunk
         print(chunk_size)
         chunks = [
             subgrids[i : i + chunk_size] for i in range(0, total_iterations, chunk_size) #total_iterations

@@ -216,7 +216,7 @@ class ParticleSwarmOptimization(BaseOptimizer):
         Networks, 1995, pp. 1942-1948.
     .. [2] TJ. Kennedy and R.C. Eberhart, A New Optimizer using Particle Swarm
         Theory, in Proceedings of the Sixth International Symposium on
-        Micromachine and Human Science, 1995, pp. 3943.
+        Micromachine and Human Science, 1995, pp. 39-43.
 
     Examples:
     ---------
@@ -229,14 +229,13 @@ class ParticleSwarmOptimization(BaseOptimizer):
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import MinMaxScaler
         from sklearn.datasets import make_classification
-        from FingersVsGestures.src.channel_elimination import ParticleSwarmOptimization # TODO adjust
+        from BCI-sift.src.channel_elimination import ParticleSwarmOptimization 
 
-        X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
-        X = X.reshape((100, 8, 4, 100))
-        grid = (2, 3)
+        X, y = make_classification(n_samples=100, n_features=20* 100)
+        X = X.reshape((100, 20, 100))
         estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
 
-        pso = ParticleSwarmOptimization(grid, estimator)
+        pso = ParticleSwarmOptimization(dimensions=(1,), feature_space = "tabular", estimator=estimator, verbose=True)
         pso.fit(X, y)
         print(pso.score_)
         35.275396825396825

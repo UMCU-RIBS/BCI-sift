@@ -227,14 +227,13 @@ class EvolutionaryAlgorithms(BaseOptimizer):
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import MinMaxScaler
         from sklearn.datasets import make_classification
-        from FingersVsGestures.src.channel_elimination import EvolutionaryAlgorithms # TODO adjust
+        from BCI-sift.src.channel_elimination import EvolutionaryAlgorithms 
 
-        X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
-        X = X.reshape((100, 8, 4, 100))
-        grid = (2, 3)
+        X, y = make_classification(n_samples=100, n_features=20* 100)
+        X = X.reshape((100, 20, 100))
         estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
 
-        ea = EvolutionaryAlgorithms(grid, estimator)
+        ea = EvolutionaryAlgorithms(dimensions=(1,), feature_space = "tabular", estimator=estimator, verbose=True)
         ea.fit(X, y)
         print(ea.score_)
         26.545670995670996

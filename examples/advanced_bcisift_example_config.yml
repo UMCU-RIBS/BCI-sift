@@ -1,0 +1,41 @@
+task: example_task
+subject:
+- participant_1
+- participant_2
+
+data_path: /example_path/data/
+save_path: /example_path/results/
+
+features: [hfb]
+sampling_rate: 50
+epochs:
+    tmin: -1.0
+    tmax: 1.0
+
+optimization:
+  dims:
+  - 1
+  metric: f1_weighted
+  outer_cv: 10
+  inner_cv: 9
+  optimization_methods:
+  - RFE             # Recursive Feature Elimination
+  - PSO             # Particle Swarm Optimization
+  - RS              # Random Search
+  - SA              # Simulated Annealing
+  - EA              # Evolutionary Algorithms
+  RFE_params:
+    n_features_to_select: 1
+    step: 1
+    importance_getter: named_steps.classifier.coef_
+  PSO_params:
+    n_iter: 60
+  SA_params:
+    n_iter: 60
+  EA_params:
+    n_gen: 60
+  RS_params:
+    n_iter: 60
+
+
+

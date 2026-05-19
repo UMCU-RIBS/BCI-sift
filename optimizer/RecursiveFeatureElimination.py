@@ -134,14 +134,14 @@ class RecursiveFeatureElimination(BaseOptimizer):
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import MinMaxScaler
         from sklearn.datasets import make_classification
-        from FingersVsGestures.src.channel_elimination import RecursiveFeatureElimination # TODO adjust
+        from BCI-sift.src.channel_elimination import RecursiveFeatureElimination 
 
-        X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
-        X = X.reshape((100, 8, 4, 100))
-        grid = (2, 3)
-        estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
 
-        rfe = RecursiveFeatureElimination(grid, estimator)
+        X, y = make_classification(n_samples=100, n_features=20* 100)
+        X = X.reshape((100, 20, 100))
+        estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC(kernel="linear"))])
+
+        rfe = RecursiveFeatureElimination(dimensions=(1,), feature_space = "tabular", estimator=estimator, importance_getter = "named_steps.svc.coef_", verbose=True)
         rfe.fit(X, y)
         print(rfe.score_)
         28.679234564345677

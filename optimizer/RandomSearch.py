@@ -59,7 +59,7 @@ class RandomSearch(BaseOptimizer):
           search spaces.
     :param n_iter: int, default = 100
         The number of iterations for the rand search process.
-    :param n_perturbations : int, default = 128
+    :param n_perturbations : int, default = 10
         The number of perturbations to be executed per iteration.
     :param tol: float, default = 1e-5
         The function tolerance; if the change in the best objective value is below this
@@ -99,14 +99,13 @@ class RandomSearch(BaseOptimizer):
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import MinMaxScaler
         from sklearn.datasets import make_classification
-        from FingersVsGestures.src.channel_elimination import RandomSearch # TODO adjust
+        from BCI-sift.src.channel_elimination import RandomSearch 
 
-        X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
-        X = X.reshape((100, 8, 4, 100))
-        grid = (2, 3)
+        X, y = make_classification(n_samples=100, n_features=20* 100)
+        X = X.reshape((100, 20, 100))
         estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
 
-        rs = RandomSearch(grid, estimator)
+        rs = RandomSearch(dimensions=(1,), feature_space = "tabular", estimator=estimator)
         rs.fit(X, y)
         print(rs.score_)
         20.49120472562842
@@ -139,7 +138,7 @@ class RandomSearch(BaseOptimizer):
         strategy: str = "conditional",
         # Random Search Settings
         n_iter: int = 100,
-        n_perturbations: int = 128,
+        n_perturbations: int = 100,
         # Training Settings
         tol: Union[Tuple[int, ...], float] = 1e-5,
         patience: Union[Tuple[int, ...], int] = int(1e5),

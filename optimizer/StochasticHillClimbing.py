@@ -329,23 +329,24 @@ class StochasticHillClimbing(BaseOptimizer):
     The following example shows how to retrieve a feature mask for
     a synthetic data set.
 
-    # >>> import numpy as np
-    # >>> from sklearn.svm import SVC
-    # >>> from sklearn.pipeline import Pipeline
-    # >>> from sklearn.preprocessing import MinMaxScaler
-    # >>> from sklearn.datasets import make_classification
-    # >>> from FingersVsGestures.src.channel_elimination import StochasticHillClimbing # TODO adjust
-    # >>> X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
-    # >>> X = X.reshape((100, 8, 4, 100))
-    # >>> grid = np.arange(1, 33).reshape(X.shape[1:3])
-    # >>> estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
+    import numpy as np
+    from sklearn.svm import SVC
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import MinMaxScaler
+    from sklearn.datasets import make_classification
+    from BCI-sift.src.channel_elimination import StochasticHillClimbing
 
-    # >>> shc = StochasticHillClimbing(grid, estimator, verbose=True)
-    # >>> shc.fit(X, y)
-    # >>> print(shc.mask_)
+    X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
+    X = X.reshape((100, 8, 4, 100))
+    grid = np.arange(1, 33).reshape(X.shape[1:3])
+    estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
+
+    shc = StochasticHillClimbing(dimensions=(1,2), feature_space = "tabular", estimator=estimator, verbose=True)
+    shc.fit(X, y)
+    print(shc.mask_)
     array([[False  True False False], [False False False False], [ True  True False False], [False False False  True],
            [False False False False], [False False False False], [False False  True False], [False False False False]])
-    # >>> print(shc.score_)
+    print(shc.score_)
      26.966666666666672
 
     Returns:

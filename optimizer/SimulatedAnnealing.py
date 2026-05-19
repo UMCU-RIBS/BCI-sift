@@ -113,7 +113,7 @@ class SimulatedAnnealing(BaseOptimizer):
         * Conditional Optimization: Optimizes each feature dimension iteratively,
           building on previous results. Generally, yields better performance for large
           search spaces.
-    :param n_iter: int, default = 1000
+    :param n_iter: int, default = 100
         The number of iterations for the simulated annealing process.
     :param optimizer_method: str, default = 'L-BFGS-B'
         The tye of optimization method used. Valid options are:
@@ -208,11 +208,10 @@ class SimulatedAnnealing(BaseOptimizer):
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import MinMaxScaler
         from sklearn.datasets import make_classification
-        from FingersVsGestures.src.channel_elimination import SimulatedAnnealing # TODO adjust
+        from BCI-sift.src.channel_elimination import SimulatedAnnealing 
 
-        X, y = make_classification(n_samples=100, n_features=8 * 4 * 100)
-        X = X.reshape((100, 8, 4, 100))
-        grid = (2, 3)
+        X, y = make_classification(n_samples=100, n_features=20* 100)
+        X = X.reshape((100, 20, 100))
         estimator = Pipeline([('scaler', MinMaxScaler()), ('svc', SVC())])
 
         sa = SimulatedAnnealing(grid, estimator)
@@ -255,7 +254,7 @@ class SimulatedAnnealing(BaseOptimizer):
         groups: Optional[numpy.ndarray] = None,
         strategy: str = "conditional",
         # Simulated Annealing Settings
-        n_iter: int = 1000,
+        n_iter: int = 100,
         optimizer_method: str = "L-BFGS-B",
         local_search: bool = True,
         initial_temp: float = 5230.0,

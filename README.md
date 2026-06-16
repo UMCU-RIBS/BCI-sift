@@ -1,5 +1,5 @@
 ## BCI Systematic and Interpretable Feature Tuning (BCI-sift)
-`BCI-sift` is a Python package for identifying the most relevant features in BCI tasks. It is described in the manuscript [BCI-sift: An automated feature selection toolbox for Brain Computer Interface applications](#). The packages implements diverse optimization algorithms to perform feature selection and can thereby enhance the decoding accuracy, reduce computational demands, and improve the interpretability of BCI systems.
+`BCI-sift` is a Python package for identifying the most relevant features in BCI tasks. It is described in the manuscript [BCI-sift: An automated feature selection toolbox for Brain Computer Interface applications](https://arxiv.org/abs/2605.19646). The packages implements diverse optimization algorithms to perform feature selection and can thereby enhance the decoding accuracy, reduce computational demands, and improve the interpretability of BCI systems.
 
 The toolbox currently provides seven optimization strategies: 
 - `RecursiveFeatureElimination`, which iteratively removes the least informative features based on model performance
@@ -16,17 +16,19 @@ The toolbox currently provides seven optimization strategies:
 
 The package is tested with:
 
-- Python `3.9`
+- Python `3.10`
 - Linux
 
 The core runtime dependencies are:
 
 - `numpy`
-- `scipy`
-- `scikit-learn`
-- `matplotlib`
 - `pandas`
+- `scikit-learn`
+- `ray[tune]`
+- `deap`
+- `numba`
 - `tqdm`
+- `pyswarms`
 
 ### Installation
 
@@ -40,10 +42,16 @@ source .venv/bin/activate
 pip install --upgrade pip
 ```
 
-And install the dependencies: 
+And install the dependencies directly from the project metadata: 
 
 ```bash
-pip install "numpy>=1.25,<2.0" "pandas>=1.5,<3.0" "scipy>=1.11,<2.0" "scikit-learn>=1.3,<1.5" "matplotlib>=3.7,<4.0" "seaborn>=0.13,<0.14" "tqdm>=4.66,<5.0"
+pip install -e .
+```
+
+or manually:
+
+```bash
+pip install "numpy==1.24.4" "pandas==2.3.3" "scikit-learn==1.3.2" "ray[tune]==2.55.1" "deap==1.4.4" "numba==0.65.1" "tqdm==4.68.2" "pyswarms==1.3.0"
 ```
 
 ## B. Quick start
